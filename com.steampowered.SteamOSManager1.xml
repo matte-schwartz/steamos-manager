@@ -207,6 +207,42 @@
   </interface>
 
   <!--
+      com.steampowered.SteamOSManager1.LowPowerMode1
+      @short_description: Interface for handling a low power mode.
+  -->
+  <interface name="com.steampowered.SteamOSManager1.LowPowerMode1">
+
+    <!--
+        EnterDownloadMode:
+
+        Enter a low power mode for downloads and get a handle that will keep
+        this mode active until all obtained handles are dropped.
+
+        @identifier: A human-readable string to identify who has obtained this handle.
+        @handle: A file handle that must be retained to keep download mode
+        active. When all handles are closed, low power mode is exited.
+    -->
+    <method name="EnterDownloadMode">
+      <arg type="s" name="identifier" direction="in"/>
+      <arg type="h" name="handle" direction="out"/>
+    </method>
+
+    <!--
+        ListDownloadModeHandles
+
+        Get a list of all of the currently open download mode handles.
+
+        @identifiers: A dict of all open download mode handles, as a pair of
+        the identifier passed to EnterDownloadMode and the number of handles
+        requested for that identifier.
+    -->
+    <method name="ListDownloadModeHandles">
+      <arg type="a{su}" name="identifiers" direction="out"/>
+    </method>
+
+  </interface>
+
+  <!--
       com.steampowered.SteamOSManager1.Manager2
       @short_description: Interface for basic manager control.
   -->

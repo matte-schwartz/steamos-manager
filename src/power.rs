@@ -10,16 +10,27 @@ use async_trait::async_trait;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use regex::Regex;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use strum::{Display, EnumString, VariantNames};
 use tokio::fs::{self, try_exists, File};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{error, warn};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Interest};
+use tokio::net::unix::pipe;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot;
+use tokio::task::JoinSet;
+use tracing::{debug, error, warn};
+use zbus::Connection;
 
 use crate::hardware::{device_type, DeviceType};
+use crate::manager::root::RootManagerProxy;
 use crate::platform::platform_config;
+use crate::Service;
 use crate::{path, write_synced};
 
 const HWMON_PREFIX: &str = "/sys/class/hwmon";
@@ -123,6 +134,26 @@ pub(crate) async fn tdp_limit_manager() -> Result<Box<dyn TdpLimitManager>> {
         TdpLimitingMethod::LenovoWmi => Box::new(LenovoWmiTdpLimitManager {}),
         TdpLimitingMethod::GpuHwmon => Box::new(GpuHwmonTdpLimitManager {}),
     })
+}
+
+pub(crate) struct TdpManagerService {
+    proxy: RootManagerProxy<'static>,
+    channel: UnboundedReceiver<TdpManagerCommand>,
+    download_set: JoinSet<String>,
+    download_handles: HashMap<String, u32>,
+    download_mode_limit: Option<NonZeroU32>,
+    previous_limit: Option<NonZeroU32>,
+    manager: Box<dyn TdpLimitManager>,
+}
+
+pub(crate) enum TdpManagerCommand {
+    SetTdpLimit(u32),
+    GetTdpLimit(oneshot::Sender<Result<u32>>),
+    GetTdpLimitRange(oneshot::Sender<Result<RangeInclusive<u32>>>),
+    IsActive(oneshot::Sender<Result<bool>>),
+    UpdateDownloadMode,
+    EnterDownloadMode(String, oneshot::Sender<Result<Option<OwnedFd>>>),
+    ListDownloadModeHandles(oneshot::Sender<HashMap<String, u32>>),
 }
 
 async fn read_gpu_sysfs_contents<S: AsRef<Path>>(suffix: S) -> Result<String> {
@@ -606,15 +637,209 @@ pub(crate) async fn set_platform_profile(name: &str, profile: &str) -> Result<()
         .map_err(|message| anyhow!("Error writing to sysfs: {message}"))
 }
 
+impl TdpManagerService {
+    pub async fn new(
+        channel: UnboundedReceiver<TdpManagerCommand>,
+        connection: &Connection,
+    ) -> Result<TdpManagerService> {
+        let config = platform_config().await?;
+        let config = config
+            .as_ref()
+            .and_then(|config| config.tdp_limit.as_ref())
+            .ok_or(anyhow!("No TDP limit configured"))?;
+
+        let manager = tdp_limit_manager().await?;
+        let proxy = RootManagerProxy::new(connection).await?;
+
+        Ok(TdpManagerService {
+            proxy,
+            channel,
+            download_set: JoinSet::new(),
+            download_handles: HashMap::new(),
+            previous_limit: None,
+            download_mode_limit: config.download_mode_limit,
+            manager,
+        })
+    }
+
+    async fn update_download_mode(&mut self) -> Result<()> {
+        if !self.manager.is_active().await? {
+            return Ok(());
+        }
+
+        let Some(download_mode_limit) = self.download_mode_limit else {
+            return Ok(());
+        };
+
+        let Some(current_limit) = NonZeroU32::new(self.manager.get_tdp_limit().await?) else {
+            // If current_limit is 0 then the interface is broken, likely because TDP limiting
+            // isn't possible with the current power profile or system, so we should just ignore
+            // it for now.
+            return Ok(());
+        };
+
+        if self.download_handles.is_empty() {
+            if let Some(previous_limit) = self.previous_limit {
+                debug!("Leaving download mode, setting TDP to {previous_limit}");
+                self.set_tdp_limit(previous_limit.get()).await?;
+                self.previous_limit = None;
+            }
+        } else {
+            if self.previous_limit.is_none() {
+                debug!("Entering download mode, caching TDP limit of {current_limit}");
+                self.previous_limit = Some(current_limit);
+            }
+            if current_limit != download_mode_limit {
+                self.set_tdp_limit(download_mode_limit.get()).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn get_download_mode_handle(
+        &mut self,
+        identifier: impl AsRef<str>,
+    ) -> Result<Option<OwnedFd>> {
+        if self.download_mode_limit.is_none() {
+            return Ok(None);
+        }
+        let (send, recv) = pipe::pipe()?;
+        let identifier = identifier.as_ref().to_string();
+        self.download_handles
+            .entry(identifier.clone())
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+        self.download_set
+            .spawn(TdpManagerService::wait_on_handle(recv, identifier));
+        self.update_download_mode().await?;
+        Ok(Some(send.into_blocking_fd()?))
+    }
+
+    async fn wait_on_handle(recv: pipe::Receiver, identifier: String) -> String {
+        loop {
+            let mut buf = [0; 1024];
+            let read = match recv.ready(Interest::READABLE).await {
+                Ok(r) if r.is_read_closed() => break,
+                Ok(r) if r.is_readable() => recv.try_read(&mut buf),
+                Err(e) => Err(e),
+                Ok(e) => {
+                    warn!("Download mode handle received unexpected event: {e:?}");
+                    break;
+                }
+            };
+            if let Err(e) = read {
+                warn!("Download mode handle received unexpected error: {e:?}");
+                break;
+            }
+        }
+        identifier
+    }
+
+    async fn set_tdp_limit(&self, limit: u32) -> Result<()> {
+        Ok(self
+            .proxy
+            .set_tdp_limit(limit)
+            .await
+            .inspect_err(|e| error!("Failed to set TDP limit: {e}"))?)
+    }
+
+    async fn handle_command(&mut self, command: TdpManagerCommand) -> Result<()> {
+        match command {
+            TdpManagerCommand::SetTdpLimit(limit) => {
+                if self.download_handles.is_empty() {
+                    self.set_tdp_limit(limit).await?;
+                }
+            }
+            TdpManagerCommand::GetTdpLimit(reply) => {
+                let _ = reply.send(self.manager.get_tdp_limit().await);
+            }
+            TdpManagerCommand::GetTdpLimitRange(reply) => {
+                let _ = reply.send(self.manager.get_tdp_limit_range().await);
+            }
+            TdpManagerCommand::IsActive(reply) => {
+                let _ = reply.send(self.manager.is_active().await);
+            }
+            TdpManagerCommand::UpdateDownloadMode => {
+                self.update_download_mode().await?;
+            }
+            TdpManagerCommand::EnterDownloadMode(identifier, reply) => {
+                let fd = self.get_download_mode_handle(identifier).await;
+                let _ = reply.send(fd);
+            }
+            TdpManagerCommand::ListDownloadModeHandles(reply) => {
+                let _ = reply.send(self.download_handles.clone());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Service for TdpManagerService {
+    const NAME: &'static str = "tdp-manager";
+
+    async fn run(&mut self) -> Result<()> {
+        loop {
+            if self.download_set.is_empty() {
+                let message = match self.channel.recv().await {
+                    None => bail!("TDP manager service channel broke"),
+                    Some(message) => message,
+                };
+                let _ = self
+                    .handle_command(message)
+                    .await
+                    .inspect_err(|e| error!("Failed to handle command: {e}"));
+            } else {
+                tokio::select! {
+                    message = self.channel.recv() => {
+                        let message = match message {
+                            None => bail!("TDP manager service channel broke"),
+                            Some(message) => message,
+                        };
+                        let _ = self.handle_command(message)
+                            .await
+                            .inspect_err(|e| error!("Failed to handle command: {e}"));
+                    },
+                    identifier = self.download_set.join_next() => {
+                        match identifier {
+                            None => (),
+                            Some(Ok(identifier)) => {
+                                match self.download_handles.entry(identifier) {
+                                    Entry::Occupied(e) if e.get() == &1 => {
+                                        e.remove();
+                                        if self.download_handles.is_empty() {
+                                            if let Err(e) = self.update_download_mode().await {
+                                                error!("Failed to update download mode: {e}");
+                                            }
+                                        }
+                                    },
+                                    Entry::Occupied(mut e) => *e.get_mut() -= 1,
+                                    Entry::Vacant(_) => (),
+                                }
+                            }
+                            Some(Err(e)) => warn!("Failed to get closed download mode handle: {e}"),
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
+    use crate::error::to_zbus_fdo_error;
     use crate::hardware::test::fake_model;
     use crate::hardware::SteamDeckVariant;
     use crate::platform::{BatteryChargeLimitConfig, PlatformConfig, RangeConfig, TdpLimitConfig};
     use crate::{enum_roundtrip, testing};
     use anyhow::anyhow;
+    use std::time::Duration;
     use tokio::fs::{create_dir_all, read_to_string, remove_dir, write};
+    use tokio::sync::mpsc::{channel, unbounded_channel, Sender};
+    use tokio::time::sleep;
+    use zbus::{fdo, interface};
 
     pub async fn setup() -> Result<()> {
         // Use hwmon5 just as a test. We needed a subfolder of HWMON_PREFIX
@@ -792,6 +1017,7 @@ CCLK_RANGE in Core0:
         platform_config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
+            download_mode_limit: None,
         });
         handle.test.platform_config.replace(Some(platform_config));
         let manager = tdp_limit_manager().await.unwrap();
@@ -815,6 +1041,7 @@ CCLK_RANGE in Core0:
         platform_config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
+            download_mode_limit: None,
         });
         handle.test.platform_config.replace(Some(platform_config));
         let manager = tdp_limit_manager().await.unwrap();
@@ -1359,5 +1586,188 @@ CCLK_RANGE in Core0:
                 .unwrap(),
             &["a", "b", "c"]
         );
+    }
+
+    struct MockTdpLimit {
+        queue: Sender<()>,
+    }
+
+    #[interface(name = "com.steampowered.SteamOSManager1.RootManager")]
+    impl MockTdpLimit {
+        async fn set_tdp_limit(&mut self, limit: u32) -> fdo::Result<()> {
+            let hwmon = path(HWMON_PREFIX);
+            write(
+                hwmon.join("hwmon5").join(TDP_LIMIT1),
+                format!("{limit}000000\n"),
+            )
+            .await
+            .expect("write");
+            self.queue.send(()).await.map_err(to_zbus_fdo_error)?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_low_power_lock() {
+        let mut h = testing::start();
+        setup().await.expect("setup");
+
+        let connection = h.new_dbus().await.expect("new_dbus");
+        let (tx, rx) = unbounded_channel();
+        let (fin_tx, fin_rx) = oneshot::channel();
+        let (start_tx, start_rx) = oneshot::channel();
+        let (reply_tx, mut reply_rx) = channel(1);
+
+        let iface = MockTdpLimit { queue: reply_tx };
+
+        let mut platform_config = PlatformConfig::default();
+        platform_config.tdp_limit = Some(TdpLimitConfig {
+            method: TdpLimitingMethod::GpuHwmon,
+            range: Some(RangeConfig { min: 3, max: 15 }),
+            download_mode_limit: NonZeroU32::new(6),
+        });
+        h.test.platform_config.replace(Some(platform_config));
+        let manager = tdp_limit_manager().await.unwrap();
+
+        connection
+            .request_name("com.steampowered.SteamOSManager1")
+            .await
+            .expect("reserve_name");
+        let object_server = connection.object_server();
+        object_server
+            .at("/com/steampowered/SteamOSManager1", iface)
+            .await
+            .expect("at");
+
+        let mut service = TdpManagerService::new(rx, &connection)
+            .await
+            .expect("service");
+        let task = tokio::spawn(async move {
+            start_tx.send(()).unwrap();
+            tokio::select! {
+                r = service.run() => r,
+                _ = fin_rx => Ok(()),
+            }
+        });
+        start_rx.await.expect("start_rx");
+
+        sleep(Duration::from_millis(1)).await;
+
+        tx.send(TdpManagerCommand::SetTdpLimit(15)).unwrap();
+        reply_rx.recv().await;
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+
+        let (os_tx, os_rx) = oneshot::channel();
+        tx.send(TdpManagerCommand::ListDownloadModeHandles(os_tx))
+            .unwrap();
+        assert!(os_rx.await.unwrap().is_empty());
+
+        let (h_tx, h_rx) = oneshot::channel();
+        tx.send(TdpManagerCommand::EnterDownloadMode(
+            String::from("test"),
+            h_tx,
+        ))
+        .unwrap();
+
+        {
+            let _h = h_rx.await.unwrap().expect("result").expect("handle");
+            reply_rx.recv().await;
+            assert_eq!(manager.get_tdp_limit().await.unwrap(), 6);
+
+            let (os_tx, os_rx) = oneshot::channel();
+            tx.send(TdpManagerCommand::ListDownloadModeHandles(os_tx))
+                .unwrap();
+            assert_eq!(os_rx.await.unwrap(), [(String::from("test"), 1u32)].into());
+
+            tx.send(TdpManagerCommand::SetTdpLimit(15)).unwrap();
+            assert!(tokio::select! {
+                _ = reply_rx.recv() => false,
+                _ = sleep(Duration::from_millis(2)) => true,
+            });
+            assert_eq!(manager.get_tdp_limit().await.unwrap(), 6);
+        }
+        reply_rx.recv().await;
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+
+        tx.send(TdpManagerCommand::SetTdpLimit(12)).unwrap();
+        reply_rx.recv().await;
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 12);
+
+        let (os_tx, os_rx) = oneshot::channel();
+        tx.send(TdpManagerCommand::ListDownloadModeHandles(os_tx))
+            .unwrap();
+        assert!(os_rx.await.unwrap().is_empty());
+
+        fin_tx.send(()).expect("fin");
+        task.await.expect("exit").expect("exit2");
+    }
+
+    #[tokio::test]
+    async fn test_disabled_low_power_lock() {
+        let mut h = testing::start();
+        setup().await.expect("setup");
+
+        let connection = h.new_dbus().await.expect("new_dbus");
+        let (tx, rx) = unbounded_channel();
+        let (fin_tx, fin_rx) = oneshot::channel();
+        let (start_tx, start_rx) = oneshot::channel();
+        let (reply_tx, mut reply_rx) = channel(1);
+
+        let iface = MockTdpLimit { queue: reply_tx };
+
+        let mut platform_config = PlatformConfig::default();
+        platform_config.tdp_limit = Some(TdpLimitConfig {
+            method: TdpLimitingMethod::GpuHwmon,
+            range: Some(RangeConfig { min: 3, max: 15 }),
+            download_mode_limit: None,
+        });
+        h.test.platform_config.replace(Some(platform_config));
+        let manager = tdp_limit_manager().await.unwrap();
+
+        connection
+            .request_name("com.steampowered.SteamOSManager1")
+            .await
+            .expect("reserve_name");
+        let object_server = connection.object_server();
+        object_server
+            .at("/com/steampowered/SteamOSManager1", iface)
+            .await
+            .expect("at");
+
+        let mut service = TdpManagerService::new(rx, &connection)
+            .await
+            .expect("service");
+        let task = tokio::spawn(async move {
+            start_tx.send(()).unwrap();
+            tokio::select! {
+                r = service.run() => r,
+                _ = fin_rx => Ok(()),
+            }
+        });
+        start_rx.await.expect("start_rx");
+
+        sleep(Duration::from_millis(1)).await;
+
+        tx.send(TdpManagerCommand::SetTdpLimit(15)).unwrap();
+        reply_rx.recv().await;
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+
+        let (os_tx, os_rx) = oneshot::channel();
+        tx.send(TdpManagerCommand::ListDownloadModeHandles(os_tx))
+            .unwrap();
+        assert!(os_rx.await.unwrap().is_empty());
+
+        let (h_tx, h_rx) = oneshot::channel();
+        tx.send(TdpManagerCommand::EnterDownloadMode(
+            String::from("test"),
+            h_tx,
+        ))
+        .unwrap();
+
+        let h = h_rx.await.unwrap().expect("result");
+        assert!(h.is_none());
+
+        fin_tx.send(()).expect("fin");
+        task.await.expect("exit").expect("exit2");
     }
 }

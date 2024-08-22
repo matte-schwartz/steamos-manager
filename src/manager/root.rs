@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{self, Fd};
-use zbus::{fdo, interface, Connection};
+use zbus::{fdo, interface, proxy, Connection};
 
 use crate::daemon::root::{Command, RootCommand};
 use crate::daemon::DaemonCommand;
@@ -89,6 +89,15 @@ impl SteamOSManager {
             channel,
         })
     }
+}
+
+#[proxy(
+    interface = "com.steampowered.SteamOSManager1.RootManager",
+    default_service = "com.steampowered.SteamOSManager1",
+    default_path = "/com/steampowered/SteamOSManager1"
+)]
+pub(crate) trait RootManager {
+    fn set_tdp_limit(&self, limit: u32) -> zbus::Result<()>;
 }
 
 #[interface(name = "com.steampowered.SteamOSManager1.RootManager")]

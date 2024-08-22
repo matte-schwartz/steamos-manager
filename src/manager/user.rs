@@ -6,13 +6,14 @@
  * SPDX-License-Identifier: MIT
  */
 
-use anyhow::Result;
+use anyhow::{Error, Result};
 use std::collections::HashMap;
 use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio::sync::oneshot;
 use tracing::error;
 use zbus::object_server::SignalEmitter;
 use zbus::proxy::{Builder, CacheProperties};
+use zbus::zvariant::Fd;
 use zbus::{fdo, interface, zvariant, Connection, ObjectServer, Proxy};
 
 use crate::cec::{HdmiCecControl, HdmiCecState};
@@ -28,7 +29,7 @@ use crate::power::{
     get_available_cpu_scaling_governors, get_available_gpu_performance_levels,
     get_available_gpu_power_profiles, get_available_platform_profiles, get_cpu_scaling_governor,
     get_gpu_clocks, get_gpu_clocks_range, get_gpu_performance_level, get_gpu_power_profile,
-    get_max_charge_level, get_platform_profile, tdp_limit_manager, TdpLimitManager,
+    get_max_charge_level, get_platform_profile, tdp_limit_manager, TdpManagerCommand,
 };
 use crate::wifi::{
     get_wifi_backend, get_wifi_power_management_state, list_wifi_interfaces, WifiBackend,
@@ -131,12 +132,15 @@ struct GpuPowerProfile1 {
 }
 
 struct TdpLimit1 {
-    proxy: Proxy<'static>,
-    manager: Box<dyn TdpLimitManager>,
+    manager: UnboundedSender<TdpManagerCommand>,
 }
 
 struct HdmiCec1 {
     hdmi_cec: HdmiCecControl<'static>,
+}
+
+struct LowPowerMode1 {
+    manager: UnboundedSender<TdpManagerCommand>,
 }
 
 struct Manager2 {
@@ -146,7 +150,7 @@ struct Manager2 {
 
 struct PerformanceProfile1 {
     proxy: Proxy<'static>,
-    tdp_limit_manager: Option<Box<dyn TdpLimitManager>>,
+    tdp_limit_manager: UnboundedSender<TdpManagerCommand>,
 }
 
 struct Storage1 {
@@ -444,6 +448,39 @@ impl HdmiCec1 {
     }
 }
 
+#[interface(name = "com.steampowered.SteamOSManager1.LowPowerMode1")]
+impl LowPowerMode1 {
+    async fn enter_download_mode(&self, identifier: &str) -> fdo::Result<Fd> {
+        let (tx, rx) = oneshot::channel();
+        self.manager
+            .send(TdpManagerCommand::EnterDownloadMode(
+                identifier.to_string(),
+                tx,
+            ))
+            .map_err(|_| {
+                fdo::Error::Failed(String::from("Failed to obtain download mode handle"))
+            })?;
+        Ok(rx
+            .await
+            .map_err(to_zbus_fdo_error)?
+            .map_err(to_zbus_fdo_error)?
+            .ok_or(fdo::Error::Failed(String::from(
+                "Download mode not configured",
+            )))?
+            .into())
+    }
+
+    async fn list_download_mode_handles(&self) -> fdo::Result<HashMap<String, u32>> {
+        let (tx, rx) = oneshot::channel();
+        self.manager
+            .send(TdpManagerCommand::ListDownloadModeHandles(tx))
+            .map_err(|_| {
+                fdo::Error::Failed(String::from("Failed to obtain download mode handle list"))
+            })?;
+        rx.await.map_err(to_zbus_fdo_error)
+    }
+}
+
 #[interface(name = "com.steampowered.SteamOSManager1.Manager2")]
 impl Manager2 {
     async fn reload_config(&self) -> fdo::Result<()> {
@@ -499,22 +536,25 @@ impl PerformanceProfile1 {
         #[zbus(connection)] connection: &Connection,
     ) -> zbus::Result<()> {
         let _: () = self.proxy.call("SetPerformanceProfile", &(profile)).await?;
-        if self.tdp_limit_manager.is_some() {
-            let connection = connection.clone();
-            let manager = tdp_limit_manager().await.map_err(to_zbus_error)?;
-            let proxy = self.proxy.clone();
-            tokio::spawn(async move {
-                if manager.is_active().await.map_err(to_zbus_error)? {
-                    let tdp_limit = TdpLimit1 { proxy, manager };
-                    connection.object_server().at(MANAGER_PATH, tdp_limit).await
-                } else {
-                    connection
-                        .object_server()
-                        .remove::<TdpLimit1, _>(MANAGER_PATH)
-                        .await
-                }
-            });
-        }
+        let connection = connection.clone();
+        let manager = self.tdp_limit_manager.clone();
+        let _ = manager.send(TdpManagerCommand::UpdateDownloadMode);
+        tokio::spawn(async move {
+            let (tx, rx) = oneshot::channel();
+            manager.send(TdpManagerCommand::IsActive(tx))?;
+            Ok::<(), Error>(if rx.await?? {
+                let tdp_limit = TdpLimit1 { manager };
+                connection
+                    .object_server()
+                    .at(MANAGER_PATH, tdp_limit)
+                    .await?;
+            } else {
+                connection
+                    .object_server()
+                    .remove::<TdpLimit1, _>(MANAGER_PATH)
+                    .await?;
+            })
+        });
         Ok(())
     }
 
@@ -551,30 +591,56 @@ impl Storage1 {
 impl TdpLimit1 {
     #[zbus(property(emits_changed_signal = "false"))]
     async fn tdp_limit(&self) -> u32 {
-        self.manager.get_tdp_limit().await.unwrap_or(0)
+        let (tx, rx) = oneshot::channel();
+        if self
+            .manager
+            .send(TdpManagerCommand::GetTdpLimit(tx))
+            .is_err()
+        {
+            return 0;
+        }
+        rx.await.unwrap_or(Ok(0)).unwrap_or(0)
     }
 
     #[zbus(property)]
     async fn set_tdp_limit(&self, limit: u32) -> zbus::Result<()> {
-        self.proxy.call("SetTdpLimit", &(limit)).await
+        self.manager
+            .send(TdpManagerCommand::SetTdpLimit(limit))
+            .map_err(|_| zbus::Error::Failure(String::from("Failed to set TDP limit")))
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn tdp_limit_min(&self) -> u32 {
-        self.manager
-            .get_tdp_limit_range()
-            .await
-            .map(|r| *r.start())
-            .unwrap_or(0)
+        let (tx, rx) = oneshot::channel();
+        if self
+            .manager
+            .send(TdpManagerCommand::GetTdpLimitRange(tx))
+            .is_err()
+        {
+            return 0;
+        }
+        if let Ok(range) = rx.await {
+            range.map(|r| *r.start()).unwrap_or(0)
+        } else {
+            0
+        }
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn tdp_limit_max(&self) -> u32 {
-        self.manager
-            .get_tdp_limit_range()
-            .await
-            .map(|r| *r.end())
-            .unwrap_or(0)
+        let (tx, rx) = oneshot::channel();
+        if self
+            .manager
+            .send(TdpManagerCommand::GetTdpLimitRange(tx))
+            .is_err()
+        {
+            return 0;
+        }
+        if let Ok(range) = rx.await {
+            range.map(|r| *r.end()).unwrap_or(0)
+        } else {
+            0
+        }
     }
 }
 
@@ -663,6 +729,7 @@ async fn create_config_interfaces(
     proxy: &Proxy<'static>,
     object_server: &ObjectServer,
     job_manager: &UnboundedSender<JobManagerCommand>,
+    tdp_manager: &UnboundedSender<TdpManagerCommand>,
 ) -> Result<()> {
     let Some(config) = platform_config().await? else {
         return Ok(());
@@ -676,7 +743,7 @@ async fn create_config_interfaces(
     };
     let performance_profile = PerformanceProfile1 {
         proxy: proxy.clone(),
-        tdp_limit_manager: tdp_limit_manager().await.ok(),
+        tdp_limit_manager: tdp_manager.clone(),
     };
     let storage = Storage1 {
         proxy: proxy.clone(),
@@ -700,16 +767,22 @@ async fn create_config_interfaces(
     }
 
     if let Ok(manager) = tdp_limit_manager().await {
+        let low_power_mode = LowPowerMode1 {
+            manager: tdp_manager.clone(),
+        };
+        if config
+            .tdp_limit
+            .as_ref()
+            .and_then(|config| config.download_mode_limit)
+            .is_some()
+        {
+            object_server.at(MANAGER_PATH, low_power_mode).await?;
+        }
         if manager.is_active().await? {
-            object_server
-                .at(
-                    MANAGER_PATH,
-                    TdpLimit1 {
-                        proxy: proxy.clone(),
-                        manager,
-                    },
-                )
-                .await?;
+            let tdp_limit = TdpLimit1 {
+                manager: tdp_manager.clone(),
+            };
+            object_server.at(MANAGER_PATH, tdp_limit).await?;
         }
     }
 
@@ -756,6 +829,7 @@ pub(crate) async fn create_interfaces(
     system: Connection,
     daemon: Sender<Command>,
     job_manager: UnboundedSender<JobManagerCommand>,
+    tdp_manager: UnboundedSender<TdpManagerCommand>,
 ) -> Result<()> {
     let proxy = Builder::<Proxy>::new(&system)
         .destination("com.steampowered.SteamOSManager1")?
@@ -800,7 +874,7 @@ pub(crate) async fn create_interfaces(
     let object_server = session.object_server();
     object_server.at(MANAGER_PATH, manager).await?;
 
-    create_config_interfaces(&proxy, object_server, &job_manager).await?;
+    create_config_interfaces(&proxy, object_server, &job_manager, &tdp_manager).await?;
 
     if device_type().await.unwrap_or_default() == DeviceType::SteamDeck {
         object_server.at(MANAGER_PATH, als).await?;
@@ -867,6 +941,7 @@ mod test {
     use crate::systemd::test::{MockManager, MockUnit};
     use crate::{path, power, testing};
 
+    use std::num::NonZeroU32;
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
     use tokio::fs::{set_permissions, write};
@@ -892,6 +967,7 @@ mod test {
             tdp_limit: Some(TdpLimitConfig {
                 method: TdpLimitingMethod::GpuHwmon,
                 range: Some(RangeConfig::new(3, 15)),
+                download_mode_limit: NonZeroU32::new(6),
             }),
             gpu_clocks: Some(RangeConfig::new(200, 1600)),
             battery_charge_limit: Some(BatteryChargeLimitConfig {
@@ -910,6 +986,7 @@ mod test {
         let mut handle = testing::start();
         let (tx_ctx, _rx_ctx) = channel::<UserContext>();
         let (tx_job, _rx_job) = unbounded_channel::<JobManagerCommand>();
+        let (tx_tdp, _rx_tdp) = unbounded_channel::<TdpManagerCommand>();
 
         if let Some(ref mut config) = platform_config {
             config.set_test_paths();
@@ -945,7 +1022,14 @@ mod test {
             .process_cb
             .set(|_, _| Ok((0, String::from("Interface wlan0"))));
         power::test::create_nodes().await?;
-        create_interfaces(connection.clone(), connection.clone(), tx_ctx, tx_job).await?;
+        create_interfaces(
+            connection.clone(),
+            connection.clone(),
+            tx_ctx,
+            tx_job,
+            tx_tdp,
+        )
+        .await?;
 
         sleep(Duration::from_millis(1)).await;
 
@@ -1084,12 +1168,35 @@ mod test {
     }
 
     #[tokio::test]
+    async fn interface_missing_tdp_limit1() {
+        let test = start(None).await.expect("start");
+
+        assert!(test_interface_missing::<TdpLimit1>(&test.connection).await);
+    }
+
+    #[tokio::test]
     async fn interface_matches_hdmi_cec1() {
         let test = start(all_config()).await.expect("start");
 
         assert!(test_interface_matches::<HdmiCec1>(&test.connection)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn interface_matches_low_power_mode1() {
+        let test = start(all_config()).await.expect("start");
+
+        assert!(test_interface_matches::<LowPowerMode1>(&test.connection)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn interface_missing_low_power_mode1() {
+        let test = start(None).await.expect("start");
+
+        assert!(test_interface_missing::<LowPowerMode1>(&test.connection).await);
     }
 
     #[tokio::test]

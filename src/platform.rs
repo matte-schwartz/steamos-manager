@@ -11,6 +11,7 @@ use nix::unistd::{access, AccessFlags};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 use std::io::ErrorKind;
+use std::num::NonZeroU32;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use strum::VariantNames;
@@ -128,6 +129,7 @@ pub(crate) struct TdpLimitConfig {
     #[serde(deserialize_with = "de_tdp_limiter_method")]
     pub method: TdpLimitingMethod,
     pub range: Option<RangeConfig<u32>>,
+    pub download_mode_limit: Option<NonZeroU32>,
 }
 
 #[derive(Clone, Default, Deserialize, Debug)]

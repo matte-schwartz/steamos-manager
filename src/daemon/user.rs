@@ -20,8 +20,8 @@ use crate::daemon::{channel, Daemon, DaemonCommand, DaemonContext};
 use crate::job::{JobManager, JobManagerService};
 use crate::manager::user::create_interfaces;
 use crate::path;
+use crate::power::TdpManagerService;
 use crate::udev::UdevMonitor;
-use crate::Service;
 
 #[derive(Copy, Clone, Default, Deserialize, Debug)]
 #[serde(default)]
@@ -104,7 +104,7 @@ pub(crate) type Command = DaemonCommand<()>;
 
 async fn create_connections(
     channel: Sender<Command>,
-) -> Result<(Connection, Connection, impl Service)> {
+) -> Result<(Connection, Connection, JobManagerService, TdpManagerService)> {
     let system = Connection::system().await?;
     let connection = Builder::session()?
         .name("com.steampowered.SteamOSManager1")?
@@ -113,10 +113,14 @@ async fn create_connections(
 
     let (jm_tx, rx) = unbounded_channel();
     let job_manager = JobManager::new(connection.clone()).await?;
-    let service = JobManagerService::new(job_manager, rx, system.clone());
-    create_interfaces(connection.clone(), system.clone(), channel, jm_tx).await?;
+    let jm_service = JobManagerService::new(job_manager, rx, system.clone());
 
-    Ok((connection, system, service))
+    let (tdp_tx, rx) = unbounded_channel();
+    let tdp_service = TdpManagerService::new(rx, &system).await?;
+
+    create_interfaces(connection.clone(), system.clone(), channel, jm_tx, tdp_tx).await?;
+
+    Ok((connection, system, jm_service, tdp_service))
 }
 
 pub async fn daemon() -> Result<()> {
@@ -127,7 +131,7 @@ pub async fn daemon() -> Result<()> {
     let subscriber = Registry::default().with(stdout_log);
     let (tx, rx) = channel::<UserContext>();
 
-    let (session, system, mirror_service) = match create_connections(tx).await {
+    let (session, system, mirror_service, tdp_service) = match create_connections(tx).await {
         Ok(c) => c,
         Err(e) => {
             let _guard = tracing::subscriber::set_default(subscriber);
@@ -140,6 +144,7 @@ pub async fn daemon() -> Result<()> {
     let mut daemon = Daemon::new(subscriber, system, rx).await?;
 
     daemon.add_service(mirror_service);
+    daemon.add_service(tdp_service);
 
     daemon.run(context).await
 }

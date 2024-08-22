@@ -16,8 +16,9 @@ use steamos_manager::power::{CPUScalingGovernor, GPUPerformanceLevel, GPUPowerPr
 use steamos_manager::proxy::{
     AmbientLightSensor1Proxy, BatteryChargeLimit1Proxy, CpuScaling1Proxy, FactoryReset1Proxy,
     FanControl1Proxy, GpuPerformanceLevel1Proxy, GpuPowerProfile1Proxy, HdmiCec1Proxy,
-    Manager2Proxy, PerformanceProfile1Proxy, Storage1Proxy, TdpLimit1Proxy, UpdateBios1Proxy,
-    UpdateDock1Proxy, WifiDebug1Proxy, WifiDebugDump1Proxy, WifiPowerManagement1Proxy,
+    LowPowerMode1Proxy, Manager2Proxy, PerformanceProfile1Proxy, Storage1Proxy, TdpLimit1Proxy,
+    UpdateBios1Proxy, UpdateDock1Proxy, WifiDebug1Proxy, WifiDebugDump1Proxy,
+    WifiPowerManagement1Proxy,
 };
 use steamos_manager::wifi::{WifiBackend, WifiDebugMode, WifiPowerManagement};
 use zbus::fdo::{IntrospectableProxy, PropertiesProxy};
@@ -169,6 +170,9 @@ enum Commands {
         /// Valid modes are `disabled`, `control-only`, `control-and-wake`
         state: HdmiCecState,
     },
+
+    /// List active low power download mode handles
+    ListLowPowerDownloadModeHandles,
 
     /// Update the BIOS, if possible
     UpdateBios,
@@ -466,6 +470,13 @@ async fn main() -> Result<()> {
             match HdmiCecState::try_from(state) {
                 Ok(s) => println!("HDMI-CEC state: {}", s.to_human_readable()),
                 Err(_) => println!("Got unknown value {state} from backend"),
+            }
+        }
+        Commands::ListLowPowerDownloadModeHandles => {
+            let proxy = LowPowerMode1Proxy::new(&conn).await?;
+            let handles: HashMap<String, u32> = proxy.list_download_mode_handles().await?;
+            for (identifier, count) in handles.into_iter().sorted() {
+                println!("{identifier}: {count}");
             }
         }
         Commands::UpdateBios => {
