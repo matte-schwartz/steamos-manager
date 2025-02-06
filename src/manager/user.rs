@@ -19,9 +19,7 @@ use crate::cec::{HdmiCecControl, HdmiCecState};
 use crate::daemon::user::Command;
 use crate::daemon::DaemonCommand;
 use crate::error::{to_zbus_error, to_zbus_fdo_error, zbus_to_zbus_fdo};
-use crate::hardware::{
-    check_support, is_deck, variant, HardwareCurrentlySupported, HardwareVariant,
-};
+use crate::hardware::{is_deck, variant, HardwareVariant};
 use crate::job::JobManagerCommand;
 use crate::platform::platform_config;
 use crate::power::{
@@ -428,14 +426,6 @@ impl HdmiCec1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.Manager2")]
 impl Manager2 {
-    #[zbus(property(emits_changed_signal = "const"))]
-    async fn hardware_currently_supported(&self) -> u32 {
-        match check_support().await {
-            Ok(res) => res as u32,
-            Err(_) => HardwareCurrentlySupported::Unknown as u32,
-        }
-    }
-
     async fn reload_config(&self) -> fdo::Result<()> {
         self.channel
             .send(DaemonCommand::ReadConfig)

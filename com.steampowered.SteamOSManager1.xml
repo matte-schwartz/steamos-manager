@@ -213,15 +213,6 @@
   <interface name="com.steampowered.SteamOSManager1.Manager2">
 
     <!--
-        HardwareCurrentlySupported:
-
-        Reports whether the current hardware is supported or not.
-
-        Valid states: 0 = Unknown, 1 = Unsupported Prototype, 2 = Supported
-    -->
-    <property name="HardwareCurrentlySupported" type="u" access="read"/>
-
-    <!--
         ReloadConfig:
 
         Reloads the configuration from disk.

@@ -7,7 +7,6 @@
 
 use anyhow::{bail, ensure, Error, Result};
 use num_enum::TryFromPrimitive;
-use std::fmt;
 use std::str::FromStr;
 use strum::{Display, EnumString};
 use tokio::fs;
@@ -29,14 +28,6 @@ pub(crate) enum HardwareVariant {
     Galileo,
 }
 
-#[derive(PartialEq, Debug, Copy, Clone, TryFromPrimitive)]
-#[repr(u32)]
-pub(crate) enum HardwareCurrentlySupported {
-    Unknown = 0,
-    UnsupportedPrototype = 1,
-    Supported = 2,
-}
-
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone, TryFromPrimitive)]
 #[strum(ascii_case_insensitive)]
 #[repr(u32)]
@@ -55,16 +46,6 @@ impl FromStr for HardwareVariant {
             "Galileo" => HardwareVariant::Galileo,
             _ => HardwareVariant::Unknown,
         })
-    }
-}
-
-impl fmt::Display for HardwareCurrentlySupported {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            HardwareCurrentlySupported::Unknown => write!(f, "Unknown"),
-            HardwareCurrentlySupported::UnsupportedPrototype => write!(f, "Unsupported Prototype"),
-            HardwareCurrentlySupported::Supported => write!(f, "Supported"),
-        }
     }
 }
 
@@ -92,17 +73,6 @@ pub(crate) async fn is_deck() -> Result<bool> {
         Ok(variant) => Ok(variant != HardwareVariant::Unknown),
         Err(e) => Err(e),
     }
-}
-
-pub(crate) async fn check_support() -> Result<HardwareCurrentlySupported> {
-    // Run jupiter-check-support note this script does exit 1 for "Support: No" case
-    // so no need to parse output, etc.
-    let res = script_exit_code("/usr/bin/jupiter-check-support", &[] as &[String; 0]).await?;
-
-    Ok(match res {
-        0 => HardwareCurrentlySupported::Supported,
-        _ => HardwareCurrentlySupported::UnsupportedPrototype,
-    })
 }
 
 pub(crate) struct FanControl {
@@ -230,25 +200,6 @@ pub mod test {
             .await
             .expect("write");
         assert_eq!(variant().await.unwrap(), HardwareVariant::Unknown);
-    }
-
-    #[test]
-    fn hardware_currently_supported_roundtrip() {
-        enum_roundtrip!(HardwareCurrentlySupported {
-            0: u32 = Unknown,
-            1: u32 = UnsupportedPrototype,
-            2: u32 = Supported,
-        });
-        assert!(HardwareCurrentlySupported::try_from(3).is_err());
-        assert_eq!(HardwareCurrentlySupported::Unknown.to_string(), "Unknown");
-        assert_eq!(
-            HardwareCurrentlySupported::UnsupportedPrototype.to_string(),
-            "Unsupported Prototype"
-        );
-        assert_eq!(
-            HardwareCurrentlySupported::Supported.to_string(),
-            "Supported"
-        );
     }
 
     #[test]

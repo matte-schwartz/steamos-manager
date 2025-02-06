@@ -39,9 +39,6 @@ enum Commands {
     /// Get luminance sensor calibration gain
     GetAlsCalibrationGain,
 
-    /// Get if the hardware is currently supported
-    GetHardwareCurrentlySupported,
-
     /// Set the fan control state
     SetFanControlState {
         /// Valid options are `bios`, `os`
@@ -247,11 +244,6 @@ async fn main() -> Result<()> {
             let gain = proxy.als_calibration_gain().await?;
             let gains = gain.into_iter().map(|g| g.to_string()).join(", ");
             println!("ALS calibration gain: {gains}");
-        }
-        Commands::GetHardwareCurrentlySupported => {
-            let proxy = Manager2Proxy::new(&conn).await?;
-            let supported = proxy.hardware_currently_supported().await?;
-            println!("Hardware currently supported: {supported}");
         }
         Commands::SetFanControlState { state } => {
             let proxy = FanControl1Proxy::new(&conn).await?;
