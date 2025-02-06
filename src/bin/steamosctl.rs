@@ -184,6 +184,9 @@ enum Commands {
 
     /// Get the recommended minimum for a charge level limit
     SuggestedMinimumChargeLimit,
+
+    /// Reload the configuration from disk
+    ReloadConfig,
 }
 
 async fn get_all_properties(conn: &Connection) -> Result<()> {
@@ -462,6 +465,10 @@ async fn main() -> Result<()> {
             let proxy = BatteryChargeLimit1Proxy::new(&conn).await?;
             let limit = proxy.suggested_minimum_limit().await?;
             println!("Suggested minimum charge limit: {limit}");
+        }
+        Commands::ReloadConfig => {
+            let proxy = Manager2Proxy::new(&conn).await?;
+            proxy.reload_config().await?;
         }
     }
 
