@@ -97,6 +97,7 @@ macro_rules! setter {
 
 struct SteamOSManager {
     proxy: Proxy<'static>,
+    _job_manager: UnboundedSender<JobManagerCommand>,
 }
 
 struct AmbientLightSensor1 {
@@ -174,7 +175,12 @@ impl SteamOSManager {
         job_manager: UnboundedSender<JobManagerCommand>,
     ) -> Result<Self> {
         job_manager.send(JobManagerCommand::MirrorConnection(system_conn))?;
-        Ok(SteamOSManager { proxy })
+        Ok(SteamOSManager {
+            proxy,
+            // Hold onto extra sender to make sure the channel isn't dropped
+            // early on devices we don't have any interfaces that use job control.
+            _job_manager: job_manager,
+        })
     }
 }
 
