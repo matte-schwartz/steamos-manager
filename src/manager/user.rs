@@ -19,7 +19,7 @@ use crate::cec::{HdmiCecControl, HdmiCecState};
 use crate::daemon::user::Command;
 use crate::daemon::DaemonCommand;
 use crate::error::{to_zbus_error, to_zbus_fdo_error, zbus_to_zbus_fdo};
-use crate::hardware::{is_deck, variant, HardwareVariant};
+use crate::hardware::{device_type, steam_deck_variant, DeviceType, SteamDeckVariant};
 use crate::job::JobManagerCommand;
 use crate::platform::platform_config;
 use crate::power::{
@@ -680,10 +680,10 @@ pub(crate) async fn create_interfaces(
 
     create_config_interfaces(&proxy, object_server, &job_manager).await?;
 
-    if is_deck().await? {
+    if device_type().await.unwrap_or_default() == DeviceType::SteamDeck {
         object_server.at(MANAGER_PATH, als).await?;
     }
-    if variant().await? == HardwareVariant::Galileo {
+    if steam_deck_variant().await.unwrap_or_default() == SteamDeckVariant::Galileo {
         object_server.at(MANAGER_PATH, wifi_debug_dump).await?;
     }
 
@@ -721,7 +721,7 @@ pub(crate) async fn create_interfaces(
         object_server.at(MANAGER_PATH, tdp_limit).await?;
     }
 
-    if variant().await.unwrap_or_default() == HardwareVariant::Galileo {
+    if steam_deck_variant().await.unwrap_or_default() == SteamDeckVariant::Galileo {
         object_server.at(MANAGER_PATH, wifi_debug).await?;
     }
 
@@ -740,7 +740,7 @@ mod test {
     use crate::daemon::channel;
     use crate::daemon::user::UserContext;
     use crate::hardware::test::fake_model;
-    use crate::hardware::HardwareVariant;
+    use crate::hardware::SteamDeckVariant;
     use crate::platform::{
         BatteryChargeLimitConfig, PlatformConfig, RangeConfig, ResetConfig, ScriptConfig,
         ServiceConfig, StorageConfig,
@@ -813,7 +813,7 @@ mod test {
         write(&exe_path, "").await?;
         set_permissions(&exe_path, PermissionsExt::from_mode(0o700)).await?;
 
-        fake_model(HardwareVariant::Galileo).await?;
+        fake_model(SteamDeckVariant::Galileo).await?;
         handle
             .test
             .process_cb

@@ -18,7 +18,7 @@ use tokio::sync::OnceCell;
 use tokio::task::spawn_blocking;
 
 #[cfg(not(test))]
-use crate::hardware::is_deck;
+use crate::hardware::{device_type, DeviceType};
 
 #[cfg(not(test))]
 static CONFIG: OnceCell<Option<PlatformConfig>> = OnceCell::const_new();
@@ -137,12 +137,14 @@ impl<T: Clone> RangeConfig<T> {
 impl PlatformConfig {
     #[cfg(not(test))]
     async fn load() -> Result<Option<PlatformConfig>> {
-        if !is_deck().await? {
-            // Non-Steam Deck platforms are not yet supported
-            return Ok(None);
-        }
-
-        let config = read_to_string("/usr/share/steamos-manager/platforms/jupiter.toml").await?;
+        let platform = match device_type().await? {
+            DeviceType::SteamDeck => "jupiter",
+            _ => return Ok(None),
+        };
+        let config = read_to_string(format!(
+            "/usr/share/steamos-manager/platforms/{platform}.toml"
+        ))
+        .await?;
         Ok(Some(toml::from_str(config.as_ref())?))
     }
 

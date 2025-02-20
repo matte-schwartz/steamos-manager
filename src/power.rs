@@ -16,7 +16,7 @@ use tokio::fs::{self, try_exists, File};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{error, warn};
 
-use crate::hardware::is_deck;
+use crate::hardware::{device_type, DeviceType};
 use crate::platform::platform_config;
 use crate::{path, write_synced};
 
@@ -139,7 +139,7 @@ pub(crate) async fn get_gpu_power_profile() -> Result<GPUPowerProfile> {
     // check which profile is current and return if possible
     let contents = read_gpu_sysfs_contents(GPU_POWER_PROFILE_SUFFIX).await?;
 
-    // NOTE: We don't filter based on is_deck here because the sysfs
+    // NOTE: We don't filter based on deck here because the sysfs
     // firmware support setting the value to no-op values.
     let lines = contents.lines();
     for line in lines {
@@ -162,7 +162,7 @@ pub(crate) async fn get_gpu_power_profile() -> Result<GPUPowerProfile> {
 
 pub(crate) async fn get_available_gpu_power_profiles() -> Result<Vec<(u32, String)>> {
     let contents = read_gpu_sysfs_contents(GPU_POWER_PROFILE_SUFFIX).await?;
-    let deck = is_deck().await?;
+    let deck = device_type().await.unwrap_or_default() == DeviceType::SteamDeck;
 
     let mut map = Vec::new();
     let lines = contents.lines();
@@ -437,7 +437,7 @@ pub(crate) async fn set_max_charge_level(limit: i32) -> Result<()> {
 pub(crate) mod test {
     use super::*;
     use crate::hardware::test::fake_model;
-    use crate::hardware::HardwareVariant;
+    use crate::hardware::SteamDeckVariant;
     use crate::platform::{BatteryChargeLimitConfig, PlatformConfig};
     use crate::{enum_roundtrip, testing};
     use anyhow::anyhow;
@@ -815,7 +815,7 @@ CCLK_RANGE in Core0:
 
         write(filename.as_path(), contents).await.expect("write");
 
-        fake_model(HardwareVariant::Unknown)
+        fake_model(SteamDeckVariant::Unknown)
             .await
             .expect("fake_model");
 
@@ -836,7 +836,7 @@ CCLK_RANGE in Core0:
             ]
         );
 
-        fake_model(HardwareVariant::Jupiter)
+        fake_model(SteamDeckVariant::Jupiter)
             .await
             .expect("fake_model");
 
@@ -872,7 +872,7 @@ CCLK_RANGE in Core0:
 
         write(filename.as_path(), contents).await.expect("write");
 
-        fake_model(HardwareVariant::Unknown)
+        fake_model(SteamDeckVariant::Unknown)
             .await
             .expect("fake_model");
 
@@ -894,7 +894,7 @@ CCLK_RANGE in Core0:
             ]
         );
 
-        fake_model(HardwareVariant::Jupiter)
+        fake_model(SteamDeckVariant::Jupiter)
             .await
             .expect("fake_model");
 
@@ -929,7 +929,7 @@ CCLK_RANGE in Core0:
 
         write(filename.as_path(), contents).await.expect("write");
 
-        fake_model(HardwareVariant::Unknown)
+        fake_model(SteamDeckVariant::Unknown)
             .await
             .expect("fake_model");
         assert_eq!(
@@ -937,7 +937,7 @@ CCLK_RANGE in Core0:
             GPUPowerProfile::Video
         );
 
-        fake_model(HardwareVariant::Jupiter)
+        fake_model(SteamDeckVariant::Jupiter)
             .await
             .expect("fake_model");
         assert_eq!(
@@ -967,12 +967,12 @@ CCLK_RANGE in Core0:
 
         write(filename.as_path(), contents).await.expect("write");
 
-        fake_model(HardwareVariant::Unknown)
+        fake_model(SteamDeckVariant::Unknown)
             .await
             .expect("fake_model");
         assert!(get_gpu_power_profile().await.is_err());
 
-        fake_model(HardwareVariant::Jupiter)
+        fake_model(SteamDeckVariant::Jupiter)
             .await
             .expect("fake_model");
         assert!(get_gpu_power_profile().await.is_err());
@@ -1000,12 +1000,12 @@ CCLK_RANGE in Core0:
 
         write(filename.as_path(), contents).await.expect("write");
 
-        fake_model(HardwareVariant::Unknown)
+        fake_model(SteamDeckVariant::Unknown)
             .await
             .expect("fake_model");
         assert!(get_gpu_power_profile().await.is_err());
 
-        fake_model(HardwareVariant::Jupiter)
+        fake_model(SteamDeckVariant::Jupiter)
             .await
             .expect("fake_model");
         assert!(get_gpu_power_profile().await.is_err());

@@ -20,7 +20,9 @@ use zbus::{fdo, interface, Connection};
 use crate::daemon::root::{Command, RootCommand};
 use crate::daemon::DaemonCommand;
 use crate::error::{to_zbus_error, to_zbus_fdo_error};
-use crate::hardware::{variant, FactoryResetKind, FanControl, FanControlState, HardwareVariant};
+use crate::hardware::{
+    steam_deck_variant, FactoryResetKind, FanControl, FanControlState, SteamDeckVariant,
+};
 use crate::job::JobManager;
 use crate::platform::platform_config;
 use crate::power::{
@@ -78,7 +80,7 @@ impl SteamOSManager {
         Ok(SteamOSManager {
             fan_control: FanControl::new(connection.clone()),
             wifi_debug_mode: WifiDebugMode::Off,
-            should_trace: variant().await? == HardwareVariant::Galileo,
+            should_trace: steam_deck_variant().await? == SteamDeckVariant::Galileo,
             job_manager: JobManager::new(connection.clone()).await?,
             connection,
             channel,
@@ -151,9 +153,9 @@ impl SteamOSManager {
     async fn als_calibration_gain(&self) -> Vec<f64> {
         // Run script to get calibration value
         let mut gains = Vec::new();
-        let indices: &[&str] = match variant().await {
-            Ok(HardwareVariant::Jupiter) => &["2"],
-            Ok(HardwareVariant::Galileo) => &["2", "4"],
+        let indices: &[&str] = match steam_deck_variant().await {
+            Ok(SteamDeckVariant::Jupiter) => &["2"],
+            Ok(SteamDeckVariant::Galileo) => &["2", "4"],
             _ => return Vec::new(),
         };
         for index in indices {
@@ -176,10 +178,10 @@ impl SteamOSManager {
 
     async fn get_als_integration_time_file_descriptor(&self, index: u32) -> fdo::Result<Fd> {
         // Get the file descriptor for the als integration time sysfs path
-        let i0 = match variant().await.map_err(to_zbus_fdo_error)? {
-            HardwareVariant::Jupiter => 1,
-            HardwareVariant::Galileo => index,
-            HardwareVariant::Unknown => {
+        let i0 = match steam_deck_variant().await.map_err(to_zbus_fdo_error)? {
+            SteamDeckVariant::Jupiter => 1,
+            SteamDeckVariant::Galileo => index,
+            SteamDeckVariant::Unknown => {
                 return Err(fdo::Error::Failed(String::from("Unknown model")))
             }
         };
@@ -457,7 +459,7 @@ mod test {
 
     async fn start() -> Result<TestHandle> {
         let mut handle = testing::start();
-        fake_model(HardwareVariant::Jupiter).await?;
+        fake_model(SteamDeckVariant::Jupiter).await?;
         create_dir_all(crate::path("/etc/NetworkManager/conf.d")).await?;
         write(
             crate::path("/etc/NetworkManager/conf.d/99-valve-wifi-backend.conf"),
@@ -608,22 +610,22 @@ mod test {
             .process_cb
             .set(|_, _| Ok((0, String::from("0.0\n"))));
 
-        fake_model(HardwareVariant::Jupiter)
+        fake_model(SteamDeckVariant::Jupiter)
             .await
             .expect("fake_model");
         assert_eq!(proxy.als_calibration_gain().await.unwrap(), &[0.0]);
 
-        fake_model(HardwareVariant::Galileo)
+        fake_model(SteamDeckVariant::Galileo)
             .await
             .expect("fake_model");
         assert_eq!(proxy.als_calibration_gain().await.unwrap(), &[0.0, 0.0]);
 
-        fake_model(HardwareVariant::Unknown)
+        fake_model(SteamDeckVariant::Unknown)
             .await
             .expect("fake_model");
         assert_eq!(proxy.als_calibration_gain().await.unwrap(), &[]);
 
-        fake_model(HardwareVariant::Jupiter)
+        fake_model(SteamDeckVariant::Jupiter)
             .await
             .expect("fake_model");
 
