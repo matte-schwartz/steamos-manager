@@ -77,17 +77,20 @@ pub(crate) async fn steam_deck_variant() -> Result<SteamDeckVariant> {
 }
 
 pub(crate) async fn device_type() -> Result<DeviceType> {
-    if variant().await? != SteamDeckVariant::Unknown {
-        return Ok(DeviceType::SteamDeck);
-    }
-    let board_vendor = fs::read_to_string(path(SYS_VENDOR_PATH)).await?;
-    if board_vendor.trim_end() == "LENOVO" {
-        let product_name = fs::read_to_string(path(PRODUCT_NAME_PATH)).await?;
-        if ["83L3", "83N6", "83Q2", "83Q3"].contains(&product_name.trim_end()) {
-            return Ok(DeviceType::LegionGoS);
-        }
-    }
-    Ok(DeviceType::Unknown)
+    let sys_vendor = fs::read_to_string(path(SYS_VENDOR_PATH)).await?;
+    let product_name = fs::read_to_string(path(PRODUCT_NAME_PATH)).await?;
+    let board_name = fs::read_to_string(path(BOARD_NAME_PATH)).await?;
+    Ok(
+        match (
+            sys_vendor.trim_end(),
+            product_name.trim_end(),
+            board_name.trim_end(),
+        ) {
+            ("LENOVO", "83L3" | "83N6" | "83Q2" | "83Q3", _) => DeviceType::LegionGoS,
+            ("Valve", _, "Jupiter" | "Galileo") => DeviceType::SteamDeck,
+            _ => DeviceType::Unknown,
+        },
+    )
 }
 
 pub(crate) struct FanControl {
@@ -175,10 +178,12 @@ pub mod test {
             SteamDeckVariant::Jupiter => {
                 write(crate::path(SYS_VENDOR_PATH), "Valve\n").await?;
                 write(crate::path(BOARD_NAME_PATH), "Jupiter\n").await?;
+                write(crate::path(PRODUCT_NAME_PATH), "Jupiter\n").await?;
             }
             SteamDeckVariant::Galileo => {
                 write(crate::path(SYS_VENDOR_PATH), "Valve\n").await?;
                 write(crate::path(BOARD_NAME_PATH), "Galileo\n").await?;
+                write(crate::path(PRODUCT_NAME_PATH), "Galileo\n").await?;
             }
         }
         Ok(())
