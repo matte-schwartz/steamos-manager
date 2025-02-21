@@ -17,7 +17,7 @@ use crate::platform::{platform_config, ServiceConfig};
 use crate::process::{run_script, script_exit_code};
 use crate::systemd::SystemdUnit;
 
-const BOARD_VENDOR_PATH: &str = "/sys/class/dmi/id/board_vendor";
+const SYS_VENDOR_PATH: &str = "/sys/class/dmi/id/sys_vendor";
 const BOARD_NAME_PATH: &str = "/sys/class/dmi/id/board_name";
 
 #[derive(PartialEq, Debug, Default, Copy, Clone)]
@@ -59,8 +59,8 @@ pub enum FactoryResetKind {
 }
 
 pub(crate) async fn variant() -> Result<HardwareVariant> {
-    let board_vendor = fs::read_to_string(path(BOARD_VENDOR_PATH)).await?;
-    if board_vendor.trim_end() != "Valve" {
+    let sys_vendor = fs::read_to_string(path(SYS_VENDOR_PATH)).await?;
+    if sys_vendor.trim_end() != "Valve" {
         return Ok(HardwareVariant::Unknown);
     }
 
@@ -156,13 +156,13 @@ pub mod test {
     pub(crate) async fn fake_model(model: HardwareVariant) -> Result<()> {
         create_dir_all(crate::path("/sys/class/dmi/id")).await?;
         match model {
-            HardwareVariant::Unknown => write(crate::path(BOARD_VENDOR_PATH), "LENOVO\n").await?,
+            HardwareVariant::Unknown => write(crate::path(SYS_VENDOR_PATH), "LENOVO\n").await?,
             HardwareVariant::Jupiter => {
-                write(crate::path(BOARD_VENDOR_PATH), "Valve\n").await?;
+                write(crate::path(SYS_VENDOR_PATH), "Valve\n").await?;
                 write(crate::path(BOARD_NAME_PATH), "Jupiter\n").await?;
             }
             HardwareVariant::Galileo => {
-                write(crate::path(BOARD_VENDOR_PATH), "Valve\n").await?;
+                write(crate::path(SYS_VENDOR_PATH), "Valve\n").await?;
                 write(crate::path(BOARD_NAME_PATH), "Galileo\n").await?;
             }
         }
@@ -178,12 +178,12 @@ pub mod test {
             .expect("create_dir_all");
         assert!(variant().await.is_err());
 
-        write(crate::path(BOARD_VENDOR_PATH), "LENOVO\n")
+        write(crate::path(SYS_VENDOR_PATH), "LENOVO\n")
             .await
             .expect("write");
         assert_eq!(variant().await.unwrap(), HardwareVariant::Unknown);
 
-        write(crate::path(BOARD_VENDOR_PATH), "Valve\n")
+        write(crate::path(SYS_VENDOR_PATH), "Valve\n")
             .await
             .expect("write");
         write(crate::path(BOARD_NAME_PATH), "Jupiter\n")

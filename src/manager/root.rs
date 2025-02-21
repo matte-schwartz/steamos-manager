@@ -457,9 +457,7 @@ mod test {
 
     async fn start() -> Result<TestHandle> {
         let mut handle = testing::start();
-        create_dir_all(crate::path("/sys/class/dmi/id")).await?;
-        write(crate::path("/sys/class/dmi/id/board_vendor"), "Valve\n").await?;
-        write(crate::path("/sys/class/dmi/id/board_name"), "Jupiter\n").await?;
+        fake_model(HardwareVariant::Jupiter).await?;
         create_dir_all(crate::path("/etc/NetworkManager/conf.d")).await?;
         write(
             crate::path("/etc/NetworkManager/conf.d/99-valve-wifi-backend.conf"),
