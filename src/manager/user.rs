@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 use tracing::error;
 use zbus::object_server::SignalEmitter;
 use zbus::proxy::{Builder, CacheProperties};
-use zbus::{fdo, interface, zvariant, Connection, Proxy};
+use zbus::{fdo, interface, zvariant, Connection, ObjectServer, Proxy};
 
 use crate::cec::{HdmiCecControl, HdmiCecState};
 use crate::daemon::user::Command;
@@ -562,6 +562,57 @@ impl WifiPowerManagement1 {
     }
 }
 
+async fn create_config_interfaces(
+    proxy: &Proxy<'static>,
+    object_server: &ObjectServer,
+    job_manager: &UnboundedSender<JobManagerCommand>,
+) -> Result<()> {
+    let Some(config) = platform_config().await? else {
+        return Ok(());
+    };
+
+    let factory_reset = FactoryReset1 {
+        proxy: proxy.clone(),
+    };
+    let fan_control = FanControl1 {
+        proxy: proxy.clone(),
+    };
+    let storage = Storage1 {
+        proxy: proxy.clone(),
+        job_manager: job_manager.clone(),
+    };
+    let update_bios = UpdateBios1 {
+        proxy: proxy.clone(),
+        job_manager: job_manager.clone(),
+    };
+    let update_dock = UpdateDock1 {
+        proxy: proxy.clone(),
+        job_manager: job_manager.clone(),
+    };
+
+    if config.factory_reset.is_some() {
+        object_server.at(MANAGER_PATH, factory_reset).await?;
+    }
+
+    if config.fan_control.is_some() {
+        object_server.at(MANAGER_PATH, fan_control).await?;
+    }
+
+    if config.storage.is_some() {
+        object_server.at(MANAGER_PATH, storage).await?;
+    }
+
+    if config.update_bios.is_some() {
+        object_server.at(MANAGER_PATH, update_bios).await?;
+    }
+
+    if config.update_dock.is_some() {
+        object_server.at(MANAGER_PATH, update_dock).await?;
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn create_interfaces(
     session: Connection,
@@ -588,12 +639,6 @@ pub(crate) async fn create_interfaces(
     let cpu_scaling = CpuScaling1 {
         proxy: proxy.clone(),
     };
-    let factory_reset = FactoryReset1 {
-        proxy: proxy.clone(),
-    };
-    let fan_control = FanControl1 {
-        proxy: proxy.clone(),
-    };
     let gpu_performance_level = GpuPerformanceLevel1 {
         proxy: proxy.clone(),
     };
@@ -605,20 +650,8 @@ pub(crate) async fn create_interfaces(
         proxy: proxy.clone(),
         channel: daemon,
     };
-    let storage = Storage1 {
-        proxy: proxy.clone(),
-        job_manager: job_manager.clone(),
-    };
     let tdp_limit = TdpLimit1 {
         proxy: proxy.clone(),
-    };
-    let update_bios = UpdateBios1 {
-        proxy: proxy.clone(),
-        job_manager: job_manager.clone(),
-    };
-    let update_dock = UpdateDock1 {
-        proxy: proxy.clone(),
-        job_manager: job_manager.clone(),
     };
     let wifi_debug = WifiDebug1 {
         proxy: proxy.clone(),
@@ -630,9 +663,10 @@ pub(crate) async fn create_interfaces(
         proxy: proxy.clone(),
     };
 
-    let config = platform_config().await?;
     let object_server = session.object_server();
     object_server.at(MANAGER_PATH, manager).await?;
+
+    create_config_interfaces(&proxy, object_server, &job_manager).await?;
 
     if is_deck().await? {
         object_server.at(MANAGER_PATH, als).await?;
@@ -646,20 +680,6 @@ pub(crate) async fn create_interfaces(
     }
 
     object_server.at(MANAGER_PATH, cpu_scaling).await?;
-
-    if config
-        .as_ref()
-        .is_some_and(|config| config.factory_reset.is_some())
-    {
-        object_server.at(MANAGER_PATH, factory_reset).await?;
-    }
-
-    if config
-        .as_ref()
-        .is_some_and(|config| config.fan_control.is_some())
-    {
-        object_server.at(MANAGER_PATH, fan_control).await?;
-    }
 
     if !get_available_gpu_performance_levels()
         .await
@@ -685,29 +705,8 @@ pub(crate) async fn create_interfaces(
 
     object_server.at(MANAGER_PATH, manager2).await?;
 
-    if config
-        .as_ref()
-        .is_some_and(|config| config.storage.is_some())
-    {
-        object_server.at(MANAGER_PATH, storage).await?;
-    }
-
     if get_tdp_limit().await.is_ok() {
         object_server.at(MANAGER_PATH, tdp_limit).await?;
-    }
-
-    if config
-        .as_ref()
-        .is_some_and(|config| config.update_bios.is_some())
-    {
-        object_server.at(MANAGER_PATH, update_bios).await?;
-    }
-
-    if config
-        .as_ref()
-        .is_some_and(|config| config.update_dock.is_some())
-    {
-        object_server.at(MANAGER_PATH, update_dock).await?;
     }
 
     if variant().await.unwrap_or_default() == HardwareVariant::Galileo {
