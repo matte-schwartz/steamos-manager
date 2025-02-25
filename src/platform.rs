@@ -188,7 +188,9 @@ mod test {
         let _handle = testing::start();
         let exe_path = path("exe");
         write(&exe_path, "").await.unwrap();
-        set_permissions(&exe_path, PermissionsExt::from_mode(0o600)).await.unwrap();
+        set_permissions(&exe_path, PermissionsExt::from_mode(0o600))
+            .await
+            .unwrap();
 
         assert!(!ScriptConfig {
             script: exe_path,
@@ -204,7 +206,9 @@ mod test {
         let _handle = testing::start();
         let exe_path = path("exe");
         write(&exe_path, "").await.unwrap();
-        set_permissions(&exe_path, PermissionsExt::from_mode(0o700)).await.unwrap();
+        set_permissions(&exe_path, PermissionsExt::from_mode(0o700))
+            .await
+            .unwrap();
 
         assert!(ScriptConfig {
             script: exe_path,
