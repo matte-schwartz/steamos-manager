@@ -602,12 +602,24 @@ async fn create_config_interfaces(
         object_server.at(MANAGER_PATH, storage).await?;
     }
 
-    if config.update_bios.is_some() {
-        object_server.at(MANAGER_PATH, update_bios).await?;
+    if let Some(config) = config.update_bios.as_ref() {
+        match config.is_valid().await {
+            Ok(true) => {
+                object_server.at(MANAGER_PATH, update_bios).await?;
+            }
+            Ok(false) => (),
+            Err(e) => error!("Failed to verify if BIOS update config is valid: {e}"),
+        }
     }
 
-    if config.update_dock.is_some() {
-        object_server.at(MANAGER_PATH, update_dock).await?;
+    if let Some(config) = config.update_dock.as_ref() {
+        match config.is_valid().await {
+            Ok(true) => {
+                object_server.at(MANAGER_PATH, update_dock).await?;
+            }
+            Ok(false) => (),
+            Err(e) => error!("Failed to verify if dock update config is valid: {e}"),
+        }
     }
 
     Ok(())
@@ -734,9 +746,11 @@ mod test {
         ServiceConfig, StorageConfig,
     };
     use crate::systemd::test::{MockManager, MockUnit};
-    use crate::{power, testing};
+    use crate::{path, power, testing};
 
+    use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
+    use tokio::fs::{set_permissions, write};
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::time::sleep;
     use zbus::object_server::Interface;
@@ -766,10 +780,14 @@ mod test {
         })
     }
 
-    async fn start(platform_config: Option<PlatformConfig>) -> Result<TestHandle> {
+    async fn start(mut platform_config: Option<PlatformConfig>) -> Result<TestHandle> {
         let mut handle = testing::start();
         let (tx_ctx, _rx_ctx) = channel::<UserContext>();
         let (tx_job, _rx_job) = unbounded_channel::<JobManagerCommand>();
+
+        if let Some(ref mut config) = platform_config {
+            config.set_test_paths();
+        }
 
         handle.test.platform_config.replace(platform_config);
         let connection = handle.new_dbus().await?;
@@ -790,6 +808,10 @@ mod test {
                 )
                 .await?;
         }
+
+        let exe_path = path("exe");
+        write(&exe_path, "").await?;
+        set_permissions(&exe_path, PermissionsExt::from_mode(0o700)).await?;
 
         fake_model(HardwareVariant::Galileo).await?;
         handle

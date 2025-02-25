@@ -6,11 +6,14 @@
  */
 
 use anyhow::Result;
+use nix::errno::Errno;
+use nix::unistd::{access, AccessFlags};
 use serde::Deserialize;
 use std::path::PathBuf;
-use tokio::fs::read_to_string;
+use tokio::fs::{metadata, read_to_string};
 #[cfg(not(test))]
 use tokio::sync::OnceCell;
+use tokio::task::spawn_blocking;
 
 #[cfg(not(test))]
 use crate::hardware::is_deck;
@@ -44,6 +47,25 @@ pub(crate) struct ScriptConfig {
     pub script: PathBuf,
     #[serde(default)]
     pub script_args: Vec<String>,
+}
+
+impl ScriptConfig {
+    pub(crate) async fn is_valid(&self) -> Result<bool> {
+        let script = self.script.clone();
+        if !spawn_blocking(move || match access(&script, AccessFlags::X_OK) {
+            Ok(()) => Ok(true),
+            Err(Errno::ENOENT | Errno::EACCES) => Ok(false),
+            Err(e) => Err(e),
+        })
+        .await??
+        {
+            return Ok(false);
+        }
+        if !metadata(&self.script).await?.is_file() {
+            return Ok(false);
+        }
+        Ok(true)
+    }
 }
 
 #[derive(Clone, Default, Deserialize, Debug)]
@@ -110,6 +132,20 @@ impl PlatformConfig {
         let config = read_to_string("/usr/share/steamos-manager/platforms/jupiter.toml").await?;
         Ok(Some(toml::from_str(config.as_ref())?))
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_paths(&mut self) {
+        if let Some(ref mut update_bios) = self.update_bios {
+            if update_bios.script.as_os_str().is_empty() {
+                update_bios.script = crate::path("exe");
+            }
+        }
+        if let Some(ref mut update_dock) = self.update_dock {
+            if update_dock.script.as_os_str().is_empty() {
+                update_dock.script = crate::path("exe");
+            }
+        }
+    }
 }
 
 #[cfg(not(test))]
@@ -127,6 +163,57 @@ pub(crate) async fn platform_config() -> Result<Option<PlatformConfig>> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::{path, testing};
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::fs::{set_permissions, write};
+
+    #[tokio::test]
+    async fn script_config_valid_no_path() {
+        assert!(!ScriptConfig::default().is_valid().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn script_config_valid_directory() {
+        assert!(!ScriptConfig {
+            script: PathBuf::from("/"),
+            script_args: Vec::new(),
+        }
+        .is_valid()
+        .await
+        .unwrap());
+    }
+
+    #[tokio::test]
+    async fn script_config_valid_noexec() {
+        let _handle = testing::start();
+        let exe_path = path("exe");
+        write(&exe_path, "").await.unwrap();
+        set_permissions(&exe_path, PermissionsExt::from_mode(0o600)).await.unwrap();
+
+        assert!(!ScriptConfig {
+            script: exe_path,
+            script_args: Vec::new(),
+        }
+        .is_valid()
+        .await
+        .unwrap());
+    }
+
+    #[tokio::test]
+    async fn script_config_valid() {
+        let _handle = testing::start();
+        let exe_path = path("exe");
+        write(&exe_path, "").await.unwrap();
+        set_permissions(&exe_path, PermissionsExt::from_mode(0o700)).await.unwrap();
+
+        assert!(ScriptConfig {
+            script: exe_path,
+            script_args: Vec::new(),
+        }
+        .is_valid()
+        .await
+        .unwrap());
+    }
 
     #[tokio::test]
     async fn jupiter_valid() {
