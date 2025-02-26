@@ -603,7 +603,7 @@ async fn create_config_interfaces(
     }
 
     if let Some(config) = config.update_bios.as_ref() {
-        match config.is_valid().await {
+        match config.is_valid(true).await {
             Ok(true) => {
                 object_server.at(MANAGER_PATH, update_bios).await?;
             }
@@ -613,7 +613,7 @@ async fn create_config_interfaces(
     }
 
     if let Some(config) = config.update_dock.as_ref() {
-        match config.is_valid().await {
+        match config.is_valid(true).await {
             Ok(true) => {
                 object_server.at(MANAGER_PATH, update_dock).await?;
             }

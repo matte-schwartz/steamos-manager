@@ -9,6 +9,8 @@ use anyhow::Result;
 use nix::errno::Errno;
 use nix::unistd::{access, AccessFlags};
 use serde::Deserialize;
+use std::io::ErrorKind;
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use tokio::fs::{metadata, read_to_string};
 #[cfg(not(test))]
@@ -50,18 +52,29 @@ pub(crate) struct ScriptConfig {
 }
 
 impl ScriptConfig {
-    pub(crate) async fn is_valid(&self) -> Result<bool> {
-        let script = self.script.clone();
-        if !spawn_blocking(move || match access(&script, AccessFlags::X_OK) {
-            Ok(()) => Ok(true),
-            Err(Errno::ENOENT | Errno::EACCES) => Ok(false),
-            Err(e) => Err(e),
-        })
-        .await??
-        {
+    pub(crate) async fn is_valid(&self, root: bool) -> Result<bool> {
+        let meta = match metadata(&self.script).await {
+            Ok(meta) => meta,
+            Err(e) if [ErrorKind::NotFound, ErrorKind::PermissionDenied].contains(&e.kind()) => {
+                return Ok(false)
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if !meta.is_file() {
             return Ok(false);
         }
-        if !metadata(&self.script).await?.is_file() {
+        if root {
+            let script = self.script.clone();
+            if !spawn_blocking(move || match access(&script, AccessFlags::X_OK) {
+                Ok(()) => Ok(true),
+                Err(Errno::ENOENT | Errno::EACCES) => Ok(false),
+                Err(e) => Err(e),
+            })
+            .await??
+            {
+                return Ok(false);
+            }
+        } else if (meta.mode() & 0o111) == 0 {
             return Ok(false);
         }
         Ok(true)
@@ -169,7 +182,12 @@ mod test {
 
     #[tokio::test]
     async fn script_config_valid_no_path() {
-        assert!(!ScriptConfig::default().is_valid().await.unwrap());
+        assert!(!ScriptConfig::default().is_valid(false).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn script_config_valid_root_no_path() {
+        assert!(!ScriptConfig::default().is_valid(true).await.unwrap());
     }
 
     #[tokio::test]
@@ -178,7 +196,18 @@ mod test {
             script: PathBuf::from("/"),
             script_args: Vec::new(),
         }
-        .is_valid()
+        .is_valid(false)
+        .await
+        .unwrap());
+    }
+
+    #[tokio::test]
+    async fn script_config_valid_root_directory() {
+        assert!(!ScriptConfig {
+            script: PathBuf::from("/"),
+            script_args: Vec::new(),
+        }
+        .is_valid(true)
         .await
         .unwrap());
     }
@@ -196,7 +225,25 @@ mod test {
             script: exe_path,
             script_args: Vec::new(),
         }
-        .is_valid()
+        .is_valid(false)
+        .await
+        .unwrap());
+    }
+
+    #[tokio::test]
+    async fn script_config_root_valid_noexec() {
+        let _handle = testing::start();
+        let exe_path = path("exe");
+        write(&exe_path, "").await.unwrap();
+        set_permissions(&exe_path, PermissionsExt::from_mode(0o600))
+            .await
+            .unwrap();
+
+        assert!(!ScriptConfig {
+            script: exe_path,
+            script_args: Vec::new(),
+        }
+        .is_valid(true)
         .await
         .unwrap());
     }
@@ -214,7 +261,25 @@ mod test {
             script: exe_path,
             script_args: Vec::new(),
         }
-        .is_valid()
+        .is_valid(false)
+        .await
+        .unwrap());
+    }
+
+    #[tokio::test]
+    async fn script_config_root_valid() {
+        let _handle = testing::start();
+        let exe_path = path("exe");
+        write(&exe_path, "").await.unwrap();
+        set_permissions(&exe_path, PermissionsExt::from_mode(0o700))
+            .await
+            .unwrap();
+
+        assert!(ScriptConfig {
+            script: exe_path,
+            script_args: Vec::new(),
+        }
+        .is_valid(true)
         .await
         .unwrap());
     }
