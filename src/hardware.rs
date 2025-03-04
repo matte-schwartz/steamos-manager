@@ -36,6 +36,7 @@ pub(crate) enum DeviceType {
     #[default]
     Unknown,
     SteamDeck,
+    LegionGo,
     LegionGoS,
 }
 
@@ -78,6 +79,7 @@ pub(crate) async fn device_variant() -> Result<(DeviceType, String)> {
     let board_name = fs::read_to_string(path(BOARD_NAME_PATH)).await?;
     let board_name = board_name.trim_end();
     Ok(match (sys_vendor.trim_end(), product_name, board_name) {
+        ("LENOVO", "83E1", _) => (DeviceType::LegionGo, product_name.to_string()),
         ("LENOVO", "83L3" | "83N6" | "83Q2" | "83Q3", _) => {
             (DeviceType::LegionGoS, product_name.to_string())
         }
