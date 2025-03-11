@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-use anyhow::{bail, ensure, Error, Result};
+use anyhow::{bail, ensure, Result};
 use num_enum::TryFromPrimitive;
 use std::str::FromStr;
 use strum::{Display, EnumString};
@@ -21,7 +21,8 @@ const SYS_VENDOR_PATH: &str = "/sys/class/dmi/id/sys_vendor";
 const BOARD_NAME_PATH: &str = "/sys/class/dmi/id/board_name";
 const PRODUCT_NAME_PATH: &str = "/sys/class/dmi/id/product_name";
 
-#[derive(PartialEq, Debug, Default, Copy, Clone)]
+#[derive(Display, EnumString, PartialEq, Debug, Default, Copy, Clone)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub(crate) enum SteamDeckVariant {
     #[default]
     Unknown,
@@ -29,7 +30,8 @@ pub(crate) enum SteamDeckVariant {
     Galileo,
 }
 
-#[derive(PartialEq, Debug, Default, Copy, Clone)]
+#[derive(Display, EnumString, PartialEq, Debug, Default, Copy, Clone)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub(crate) enum DeviceType {
     #[default]
     Unknown,
@@ -47,17 +49,6 @@ pub enum FanControlState {
     Os = 1,
 }
 
-impl FromStr for SteamDeckVariant {
-    type Err = Error;
-    fn from_str(input: &str) -> Result<SteamDeckVariant, Self::Err> {
-        Ok(match input {
-            "Jupiter" => SteamDeckVariant::Jupiter,
-            "Galileo" => SteamDeckVariant::Galileo,
-            _ => SteamDeckVariant::Unknown,
-        })
-    }
-}
-
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone, TryFromPrimitive)]
 #[strum(ascii_case_insensitive)]
 #[repr(u32)]
@@ -73,7 +64,7 @@ pub(crate) async fn steam_deck_variant() -> Result<SteamDeckVariant> {
         return Ok(SteamDeckVariant::Unknown);
     }
     let board_name = fs::read_to_string(path(BOARD_NAME_PATH)).await?;
-    SteamDeckVariant::from_str(board_name.trim_end())
+    Ok(SteamDeckVariant::from_str(board_name.trim_end()).unwrap_or_default())
 }
 
 pub(crate) async fn device_type() -> Result<DeviceType> {
