@@ -9,6 +9,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use strum::{Display, EnumString};
@@ -44,6 +45,12 @@ lazy_static! {
         Regex::new(r"^\s*(?<value>[0-9]+)\s+(?<name>[0-9A-Za-z_]+)(?<active>\*)?").unwrap();
     static ref GPU_CLOCK_LEVELS_REGEX: Regex =
         Regex::new(r"^\s*(?<index>[0-9]+): (?<value>[0-9]+)Mhz").unwrap();
+    static ref GPU_CLOCK_RANGES: HashMap<&'static str, (u32, u32)> = HashMap::from([
+        ("1002:1435", (200, 1600)), // Sephiroth (Steam Deck OLED)
+        ("1002:15bf", (800, 2700)), // Phoenix1 (Ryzen Z1 Extreme)
+        ("1002:15c8", (800, 2799)), // Phoenix2 (Ryzen Z1/Radeon 740M Graphics)
+        ("1002:163f", (200, 1600)), // VanGogh (Steam Deck)
+    ]);
 }
 
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone, TryFromPrimitive)]
@@ -263,6 +270,18 @@ pub(crate) async fn get_gpu_clocks_range() -> Result<(u32, u32)> {
     {
         return Ok((range.min, range.max));
     }
+
+    let vid = read_gpu_sysfs_contents("device/vendor").await?;
+    let pid = read_gpu_sysfs_contents("device/device").await?;
+    if let (Some(vid), Some(pid)) = (
+        vid.trim_end().strip_prefix("0x"),
+        pid.trim_end().strip_prefix("0x"),
+    ) {
+        if let Some(range) = GPU_CLOCK_RANGES.get(format!("{vid}:{pid}").as_str()) {
+            return Ok(*range);
+        }
+    }
+
     let contents = read_gpu_sysfs_contents(GPU_CLOCK_LEVELS_SUFFIX).await?;
     let lines = contents.lines();
     let mut min = 1_000_000;
@@ -715,7 +734,7 @@ CCLK_RANGE in Core0:
     }
 
     #[tokio::test]
-    async fn test_get_gpu_clocks_range() {
+    async fn test_get_gpu_clocks_range_parse() {
         let _h = testing::start();
 
         setup().await.expect("setup");
@@ -727,6 +746,12 @@ CCLK_RANGE in Core0:
 
         assert!(get_gpu_clocks_range().await.is_err());
 
+        write(base.join("device/vendor"), b"0x1002\n")
+            .await
+            .unwrap();
+        write(base.join("device/device"), b"0xffff\n")
+            .await
+            .unwrap();
         write(filename.as_path(), &[] as &[u8; 0])
             .await
             .expect("write");
@@ -742,6 +767,28 @@ CCLK_RANGE in Core0:
 1: 200Mhz
 2: 1100Mhz";
         write(filename.as_path(), contents).await.expect("write");
+        assert_eq!(get_gpu_clocks_range().await.unwrap(), (200, 1600));
+    }
+
+    #[tokio::test]
+    async fn test_get_gpu_clocks_range_vid_pid() {
+        let _h = testing::start();
+
+        setup().await.expect("setup");
+        let base = find_hwmon(GPU_HWMON_NAME).await.unwrap();
+        let filename = base.join(GPU_CLOCK_LEVELS_SUFFIX);
+        create_dir_all(filename.parent().unwrap())
+            .await
+            .expect("create_dir_all");
+
+        assert!(get_gpu_clocks_range().await.is_err());
+
+        write(base.join("device/vendor"), b"0x1002\n")
+            .await
+            .unwrap();
+        write(base.join("device/device"), b"0x1435\n")
+            .await
+            .unwrap();
         assert_eq!(get_gpu_clocks_range().await.unwrap(), (200, 1600));
     }
 
