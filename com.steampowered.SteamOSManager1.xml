@@ -32,23 +32,23 @@
   <!--
       com.steampowered.SteamOSManager1.BatteryChargeLimit1
       @short_description: Optional interface for battery charging limit
-	  properties.
+      properties.
   -->
   <interface name="com.steampowered.SteamOSManager1.BatteryChargeLimit1">
 
     <!--
         MaxChargeLevel:
 
-		The maximum allowable percentage for battery charging. If setting to
-		-1, this will reset to the default.
+        The maximum allowable percentage for battery charging. If setting to
+        -1, this will reset to the default.
     -->
     <property name="MaxChargeLevel" type="i" access="readwrite"/>
 
     <!--
         SuggestedMinimumLimit:
 
-		The suggested minimum value for a frontend to allow setting the max
-		charge level.
+        The suggested minimum value for a frontend to allow setting the max
+        charge level.
     -->
     <property name="SuggestedMinimumLimit" type="i" access="read"/>
 
