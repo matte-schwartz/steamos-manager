@@ -19,7 +19,9 @@ use crate::cec::{HdmiCecControl, HdmiCecState};
 use crate::daemon::user::Command;
 use crate::daemon::DaemonCommand;
 use crate::error::{to_zbus_error, to_zbus_fdo_error, zbus_to_zbus_fdo};
-use crate::hardware::{device_type, steam_deck_variant, DeviceType, SteamDeckVariant};
+use crate::hardware::{
+    device_type, device_variant, steam_deck_variant, DeviceType, SteamDeckVariant,
+};
 use crate::job::JobManagerCommand;
 use crate::platform::platform_config;
 use crate::power::{
@@ -439,6 +441,12 @@ impl Manager2 {
             .inspect_err(|message| error!("Error sending ReadConfig command: {message}"))
             .map_err(to_zbus_fdo_error)?;
         method!(self, "ReloadConfig")
+    }
+
+    #[zbus(property(emits_changed_signal = "const"))]
+    async fn device_model(&self) -> fdo::Result<(String, String)> {
+        let (device, variant) = device_variant().await.map_err(to_zbus_fdo_error)?;
+        Ok((device.to_string(), variant))
     }
 }
 

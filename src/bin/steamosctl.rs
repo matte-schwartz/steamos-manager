@@ -184,6 +184,9 @@ enum Commands {
 
     /// Reload the configuration from disk
     ReloadConfig,
+
+    /// Get the model and variant of this device, if known
+    GetDeviceModel,
 }
 
 async fn get_all_properties(conn: &Connection) -> Result<()> {
@@ -461,6 +464,12 @@ async fn main() -> Result<()> {
         Commands::ReloadConfig => {
             let proxy = Manager2Proxy::new(&conn).await?;
             proxy.reload_config().await?;
+        }
+        Commands::GetDeviceModel => {
+            let proxy = Manager2Proxy::new(&conn).await?;
+            let (device, variant) = proxy.device_model().await?;
+            println!("Model: {device}");
+            println!("Variant: {variant}");
         }
     }
 

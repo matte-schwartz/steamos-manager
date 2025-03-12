@@ -21,4 +21,8 @@ use zbus::proxy;
 pub trait Manager2 {
     /// ReloadConfig method
     fn reload_config(&self) -> zbus::Result<()>;
+
+    /// DeviceModel property
+    #[zbus(property)]
+    fn device_model(&self) -> zbus::Result<(String, String)>;
 }

@@ -219,6 +219,15 @@
     -->
     <method name="ReloadConfig"/>
 
+    <!--
+        DeviceModel:
+
+        A tuple of the device model and variant that SteamOS Manager is running
+        on. If the device or variant isn't known the applicable fields will be
+        "unknown" instead.
+    -->
+    <property name="DeviceModel" type="ss" access="read"/>
+
   </interface>
 
   <!--
