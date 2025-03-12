@@ -68,20 +68,22 @@ pub(crate) async fn steam_deck_variant() -> Result<SteamDeckVariant> {
 }
 
 pub(crate) async fn device_type() -> Result<DeviceType> {
+    Ok(device_variant().await?.0)
+}
+
+pub(crate) async fn device_variant() -> Result<(DeviceType, String)> {
     let sys_vendor = fs::read_to_string(path(SYS_VENDOR_PATH)).await?;
     let product_name = fs::read_to_string(path(PRODUCT_NAME_PATH)).await?;
+    let product_name = product_name.trim_end();
     let board_name = fs::read_to_string(path(BOARD_NAME_PATH)).await?;
-    Ok(
-        match (
-            sys_vendor.trim_end(),
-            product_name.trim_end(),
-            board_name.trim_end(),
-        ) {
-            ("LENOVO", "83L3" | "83N6" | "83Q2" | "83Q3", _) => DeviceType::LegionGoS,
-            ("Valve", _, "Jupiter" | "Galileo") => DeviceType::SteamDeck,
-            _ => DeviceType::Unknown,
-        },
-    )
+    let board_name = board_name.trim_end();
+    Ok(match (sys_vendor.trim_end(), product_name, board_name) {
+        ("LENOVO", "83L3" | "83N6" | "83Q2" | "83Q3", _) => {
+            (DeviceType::LegionGoS, product_name.to_string())
+        }
+        ("Valve", _, "Jupiter" | "Galileo") => (DeviceType::SteamDeck, board_name.to_string()),
+        _ => (DeviceType::Unknown, String::from("unknown")),
+    })
 }
 
 pub(crate) struct FanControl {
@@ -188,6 +190,7 @@ pub mod test {
             .await
             .expect("create_dir_all");
         assert!(steam_deck_variant().await.is_err());
+        assert!(device_variant().await.is_err());
 
         write(crate::path(SYS_VENDOR_PATH), "LENOVO\n")
             .await
@@ -202,7 +205,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Unknown
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::Unknown);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::Unknown, String::from("unknown"))
+        );
 
         write(crate::path(PRODUCT_NAME_PATH), "83L3\n")
             .await
@@ -211,7 +217,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Unknown
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::LegionGoS);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::LegionGoS, String::from("83L3"))
+        );
 
         write(crate::path(PRODUCT_NAME_PATH), "83N6\n")
             .await
@@ -220,7 +229,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Unknown
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::LegionGoS);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::LegionGoS, String::from("83N6"))
+        );
 
         write(crate::path(PRODUCT_NAME_PATH), "83Q2\n")
             .await
@@ -229,7 +241,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Unknown
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::LegionGoS);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::LegionGoS, String::from("83Q2"))
+        );
 
         write(crate::path(PRODUCT_NAME_PATH), "83Q3\n")
             .await
@@ -238,7 +253,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Unknown
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::LegionGoS);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::LegionGoS, String::from("83Q3"))
+        );
 
         write(crate::path(SYS_VENDOR_PATH), "Valve\n")
             .await
@@ -253,7 +271,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Jupiter
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::SteamDeck);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::SteamDeck, String::from("Jupiter"))
+        );
 
         write(crate::path(BOARD_NAME_PATH), "Galileo\n")
             .await
@@ -265,7 +286,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Galileo
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::SteamDeck);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::SteamDeck, String::from("Galileo"))
+        );
 
         write(crate::path(BOARD_NAME_PATH), "Neptune\n")
             .await
@@ -274,7 +298,10 @@ pub mod test {
             steam_deck_variant().await.unwrap(),
             SteamDeckVariant::Unknown
         );
-        assert_eq!(device_type().await.unwrap(), DeviceType::Unknown);
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::Unknown, String::from("unknown"))
+        );
     }
 
     #[test]
