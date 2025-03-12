@@ -21,8 +21,4 @@ use zbus::proxy;
 pub trait Manager2 {
     /// ReloadConfig method
     fn reload_config(&self) -> zbus::Result<()>;
-
-    /// HardwareCurrentlySupported property
-    #[zbus(property)]
-    fn hardware_currently_supported(&self) -> zbus::Result<u32>;
 }
