@@ -1,6 +1,6 @@
 [package]
 name = "steamos-manager"
-version = "25.1.1"
+version = "25.3.1"
 edition = "2021"
 
 [profile.release]
