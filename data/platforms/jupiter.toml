@@ -33,6 +33,10 @@ systemd = "jupiter-fan-control.service"
 min = 3
 max = 15
 
+[gpu_clocks]
+min = 200
+max = 1600
+
 [battery_charge_limit]
 suggested_minimum_limit = 10
 hwmon_name = "steamdeck_hwmon"
