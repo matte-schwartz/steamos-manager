@@ -165,7 +165,7 @@
   </interface>
 
   <!--
-      com.steampowered.SteamOSManager1.GpuPower1
+      com.steampowered.SteamOSManager1.GpuPowerProfile1
       @short_description: Optional interface for GPU power properties.
   -->
   <interface name="com.steampowered.SteamOSManager1.GpuPowerProfile1">
