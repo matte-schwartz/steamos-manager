@@ -34,6 +34,7 @@ pub(crate) struct PlatformConfig {
     pub tdp_limit: Option<RangeConfig<u32>>,
     pub gpu_clocks: Option<RangeConfig<u32>>,
     pub battery_charge_limit: Option<BatteryChargeLimitConfig>,
+    pub performance_profile: Option<PerformanceProfileConfig>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -113,6 +114,12 @@ pub(crate) struct BatteryChargeLimitConfig {
     pub attribute: String,
 }
 
+#[derive(Clone, Deserialize, Debug)]
+pub(crate) struct PerformanceProfileConfig {
+    pub suggested_default: String,
+    pub platform_profile_name: String,
+}
+
 #[derive(Clone, Default, Deserialize, Debug)]
 pub(crate) struct FormatDeviceConfig {
     pub script: PathBuf,
@@ -139,6 +146,7 @@ impl PlatformConfig {
     async fn load() -> Result<Option<PlatformConfig>> {
         let platform = match device_type().await? {
             DeviceType::SteamDeck => "jupiter",
+            DeviceType::LegionGoS => "legion-go-s",
             _ => return Ok(None),
         };
         let config = read_to_string(format!(

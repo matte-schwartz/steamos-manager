@@ -37,6 +37,8 @@ const GPU_CLOCK_LEVELS_SUFFIX: &str = "device/pp_dpm_sclk";
 const CPU_SCALING_GOVERNOR_SUFFIX: &str = "scaling_governor";
 const CPU_SCALING_AVAILABLE_GOVERNORS_SUFFIX: &str = "scaling_available_governors";
 
+const PLATFORM_PROFILE_PREFIX: &str = "/sys/class/platform-profile";
+
 const TDP_LIMIT1: &str = "power1_cap";
 const TDP_LIMIT2: &str = "power2_cap";
 
@@ -346,22 +348,30 @@ pub(crate) async fn get_gpu_clocks() -> Result<u32> {
     Ok(0)
 }
 
-async fn find_hwmon(hwmon: &str) -> Result<PathBuf> {
-    let mut dir = fs::read_dir(path(HWMON_PREFIX)).await?;
+async fn find_sysdir(prefix: impl AsRef<Path>, expected: &str) -> Result<PathBuf> {
+    let mut dir = fs::read_dir(prefix.as_ref()).await?;
     loop {
         let base = match dir.next_entry().await? {
             Some(entry) => entry.path(),
-            None => bail!("hwmon not found"),
+            None => bail!("prefix not found"),
         };
         let file_name = base.join("name");
         let name = fs::read_to_string(file_name.as_path())
             .await?
             .trim()
             .to_string();
-        if name == hwmon {
+        if name == expected {
             return Ok(base);
         }
     }
+}
+
+async fn find_hwmon(hwmon: &str) -> Result<PathBuf> {
+    find_sysdir(path(HWMON_PREFIX), hwmon).await
+}
+
+async fn find_platform_profile(name: &str) -> Result<PathBuf> {
+    find_sysdir(path(PLATFORM_PROFILE_PREFIX), name).await
 }
 
 pub(crate) async fn get_tdp_limit() -> Result<u32> {
@@ -435,6 +445,33 @@ pub(crate) async fn set_max_charge_level(limit: i32) -> Result<()> {
         .inspect_err(|message| error!("Error writing to sysfs file: {message}"))
 }
 
+pub(crate) async fn get_available_platform_profiles(name: &str) -> Result<Vec<String>> {
+    let base = find_platform_profile(name).await?;
+    Ok(fs::read_to_string(base.join("choices"))
+        .await
+        .map_err(|message| anyhow!("Error reading sysfs: {message}"))?
+        .trim()
+        .split(' ')
+        .map(ToString::to_string)
+        .collect())
+}
+
+pub(crate) async fn get_platform_profile(name: &str) -> Result<String> {
+    let base = find_platform_profile(name).await?;
+    Ok(fs::read_to_string(base.join("profile"))
+        .await
+        .map_err(|message| anyhow!("Error reading sysfs: {message}"))?
+        .trim()
+        .to_string())
+}
+
+pub(crate) async fn set_platform_profile(name: &str, profile: &str) -> Result<()> {
+    let base = find_platform_profile(name).await?;
+    fs::write(base.join("profile"), profile.as_bytes())
+        .await
+        .map_err(|message| anyhow!("Error writing to sysfs: {message}"))
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
@@ -483,6 +520,11 @@ pub(crate) mod test {
         write(base.join("name"), "steamdeck_hwmon\n").await?;
 
         write(base.join("max_battery_charge_level"), "10\n").await?;
+
+        let base = path(PLATFORM_PROFILE_PREFIX).join("platform-profile0");
+        create_dir_all(&base).await?;
+        write_synced(base.join("name"), b"power-driver\n").await?;
+        write_synced(base.join("choices"), b"a b c\n").await?;
 
         Ok(())
     }
@@ -1139,5 +1181,37 @@ CCLK_RANGE in Core0:
 
         assert!(set_max_charge_level(101).await.is_err());
         assert!(set_max_charge_level(-1).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_available_performance_profiles() {
+        let _h = testing::start();
+
+        assert!(get_available_platform_profiles("power-driver")
+            .await
+            .is_err());
+
+        let base = path(PLATFORM_PROFILE_PREFIX).join("platform-profile0");
+        create_dir_all(&base).await.unwrap();
+        assert!(get_available_platform_profiles("power-driver")
+            .await
+            .is_err());
+
+        write_synced(base.join("name"), b"power-driver\n")
+            .await
+            .unwrap();
+        assert!(get_available_platform_profiles("power-driver")
+            .await
+            .is_err());
+
+        write_synced(base.join("choices"), b"a b c\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_available_platform_profiles("power-driver")
+                .await
+                .unwrap(),
+            &["a", "b", "c"]
+        );
     }
 }

@@ -27,7 +27,8 @@ use crate::job::JobManager;
 use crate::platform::platform_config;
 use crate::power::{
     set_cpu_scaling_governor, set_gpu_clocks, set_gpu_performance_level, set_gpu_power_profile,
-    set_max_charge_level, set_tdp_limit, CPUScalingGovernor, GPUPerformanceLevel, GPUPowerProfile,
+    set_max_charge_level, set_platform_profile, set_tdp_limit, CPUScalingGovernor,
+    GPUPerformanceLevel, GPUPowerProfile,
 };
 use crate::process::{run_script, script_output};
 use crate::wifi::{
@@ -425,6 +426,19 @@ impl SteamOSManager {
 
     async fn set_max_charge_level(&self, level: i32) -> fdo::Result<()> {
         set_max_charge_level(if level == -1 { 0 } else { level })
+            .await
+            .map_err(to_zbus_fdo_error)
+    }
+
+    async fn set_performance_profile(&self, profile: &str) -> fdo::Result<()> {
+        let config = platform_config().await.map_err(to_zbus_fdo_error)?;
+        let config = config
+            .as_ref()
+            .and_then(|config| config.performance_profile.as_ref())
+            .ok_or(fdo::Error::Failed(String::from(
+                "No performance platform-profile configured",
+            )))?;
+        set_platform_profile(&config.platform_profile_name, profile)
             .await
             .map_err(to_zbus_fdo_error)
     }

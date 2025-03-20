@@ -26,9 +26,9 @@ use crate::job::JobManagerCommand;
 use crate::platform::platform_config;
 use crate::power::{
     get_available_cpu_scaling_governors, get_available_gpu_performance_levels,
-    get_available_gpu_power_profiles, get_cpu_scaling_governor, get_gpu_clocks,
-    get_gpu_clocks_range, get_gpu_performance_level, get_gpu_power_profile, get_max_charge_level,
-    get_tdp_limit, get_tdp_limit_range,
+    get_available_gpu_power_profiles, get_available_platform_profiles, get_cpu_scaling_governor,
+    get_gpu_clocks, get_gpu_clocks_range, get_gpu_performance_level, get_gpu_power_profile,
+    get_max_charge_level, get_platform_profile, get_tdp_limit, get_tdp_limit_range,
 };
 use crate::wifi::{
     get_wifi_backend, get_wifi_power_management_state, list_wifi_interfaces, WifiBackend,
@@ -141,6 +141,10 @@ struct HdmiCec1 {
 struct Manager2 {
     proxy: Proxy<'static>,
     channel: Sender<Command>,
+}
+
+struct PerformanceProfile1 {
+    proxy: Proxy<'static>,
 }
 
 struct Storage1 {
@@ -456,6 +460,54 @@ impl Manager2 {
     }
 }
 
+#[interface(name = "com.steampowered.SteamOSManager1.PerformanceProfile1")]
+impl PerformanceProfile1 {
+    #[zbus(property(emits_changed_signal = "false"))]
+    async fn available_performance_profiles(&self) -> fdo::Result<Vec<String>> {
+        let config = platform_config().await.map_err(to_zbus_fdo_error)?;
+        let config = config
+            .as_ref()
+            .and_then(|config| config.performance_profile.as_ref())
+            .ok_or(fdo::Error::Failed(String::from(
+                "No performance platform-profile configured",
+            )))?;
+        get_available_platform_profiles(&config.platform_profile_name)
+            .await
+            .map_err(to_zbus_fdo_error)
+    }
+
+    #[zbus(property(emits_changed_signal = "false"))]
+    async fn performance_profile(&self) -> fdo::Result<String> {
+        let config = platform_config().await.map_err(to_zbus_fdo_error)?;
+        let config = config
+            .as_ref()
+            .and_then(|config| config.performance_profile.as_ref())
+            .ok_or(fdo::Error::Failed(String::from(
+                "No performance platform-profile configured",
+            )))?;
+        get_platform_profile(&config.platform_profile_name)
+            .await
+            .map_err(to_zbus_fdo_error)
+    }
+
+    #[zbus(property)]
+    async fn set_performance_profile(&self, profile: &str) -> zbus::Result<()> {
+        self.proxy.call("SetPerformanceProfile", &(profile)).await
+    }
+
+    #[zbus(property(emits_changed_signal = "const"))]
+    async fn suggested_default_performance_profile(&self) -> fdo::Result<String> {
+        let config = platform_config().await.map_err(to_zbus_fdo_error)?;
+        let config = config
+            .as_ref()
+            .and_then(|config| config.performance_profile.as_ref())
+            .ok_or(fdo::Error::Failed(String::from(
+                "No performance platform-profile configured",
+            )))?;
+        Ok(config.suggested_default.to_string())
+    }
+}
+
 #[interface(name = "com.steampowered.SteamOSManager1.Storage1")]
 impl Storage1 {
     async fn format_device(
@@ -591,6 +643,9 @@ async fn create_config_interfaces(
     let fan_control = FanControl1 {
         proxy: proxy.clone(),
     };
+    let performance_profile = PerformanceProfile1 {
+        proxy: proxy.clone(),
+    };
     let storage = Storage1 {
         proxy: proxy.clone(),
         job_manager: job_manager.clone(),
@@ -610,6 +665,16 @@ async fn create_config_interfaces(
 
     if config.fan_control.is_some() {
         object_server.at(MANAGER_PATH, fan_control).await?;
+    }
+
+    if let Some(ref config) = config.performance_profile {
+        if !get_available_platform_profiles(&config.platform_profile_name)
+            .await
+            .unwrap_or_default()
+            .is_empty()
+        {
+            object_server.at(MANAGER_PATH, performance_profile).await?;
+        }
     }
 
     if config.storage.is_some() {
@@ -756,8 +821,8 @@ mod test {
     use crate::hardware::test::fake_model;
     use crate::hardware::SteamDeckVariant;
     use crate::platform::{
-        BatteryChargeLimitConfig, PlatformConfig, RangeConfig, ResetConfig, ScriptConfig,
-        ServiceConfig, StorageConfig,
+        BatteryChargeLimitConfig, PerformanceProfileConfig, PlatformConfig, RangeConfig,
+        ResetConfig, ScriptConfig, ServiceConfig, StorageConfig,
     };
     use crate::systemd::test::{MockManager, MockUnit};
     use crate::{path, power, testing};
@@ -790,6 +855,10 @@ mod test {
                 suggested_minimum_limit: Some(10),
                 hwmon_name: String::from("steamdeck_hwmon"),
                 attribute: String::from("max_battery_charge_level"),
+            }),
+            performance_profile: Some(PerformanceProfileConfig {
+                platform_profile_name: String::from("power-driver"),
+                suggested_default: String::from("balanced"),
             }),
         })
     }
@@ -987,6 +1056,24 @@ mod test {
         assert!(test_interface_matches::<Manager2>(&test.connection)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn interface_matches_performance_profile1() {
+        let test = start(all_config()).await.expect("start");
+
+        assert!(
+            test_interface_matches::<PerformanceProfile1>(&test.connection)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn interface_missing_performance_profile1() {
+        let test = start(None).await.expect("start");
+
+        assert!(test_interface_missing::<PerformanceProfile1>(&test.connection).await);
     }
 
     #[tokio::test]

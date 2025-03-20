@@ -231,6 +231,38 @@
   </interface>
 
   <!--
+      com.steampowered.SteamOSManager1.PerformanceProfile1
+      @short_description: Optional interface for platform power properties.
+  -->
+  <interface name="com.steampowered.SteamOSManager1.PerformanceProfile1">
+
+    <!--
+        AvailablePerformanceProfiles:
+
+        Enumerate the supported performance profiles available on the system.
+
+        A list of supported profiles.
+    -->
+    <property name="AvailablePerformanceProfiles" type="as" access="read"/>
+
+    <!--
+        PerformanceProfile:
+
+        The current perrormance profile. Valid values come from the
+        AvailablePerformanceProfiles property.
+    -->
+    <property name="PerformanceProfile" type="s" access="readwrite"/>
+
+    <!--
+        SuggestedDefaultPerformanceProfile:
+
+        The suggested default performance profile for the system.
+    -->
+    <property name="SuggestedDefaultPerformanceProfile" type="s" access="read"/>
+
+  </interface>
+
+  <!--
       com.steampowered.SteamOSManager1.Storage1
       @short_description: Optional interface for managing storage devices
       and filesystems.

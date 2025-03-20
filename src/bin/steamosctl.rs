@@ -16,8 +16,8 @@ use steamos_manager::power::{CPUScalingGovernor, GPUPerformanceLevel, GPUPowerPr
 use steamos_manager::proxy::{
     AmbientLightSensor1Proxy, BatteryChargeLimit1Proxy, CpuScaling1Proxy, FactoryReset1Proxy,
     FanControl1Proxy, GpuPerformanceLevel1Proxy, GpuPowerProfile1Proxy, HdmiCec1Proxy,
-    Manager2Proxy, Storage1Proxy, TdpLimit1Proxy, UpdateBios1Proxy, UpdateDock1Proxy,
-    WifiDebug1Proxy, WifiDebugDump1Proxy, WifiPowerManagement1Proxy,
+    Manager2Proxy, PerformanceProfile1Proxy, Storage1Proxy, TdpLimit1Proxy, UpdateBios1Proxy,
+    UpdateDock1Proxy, WifiDebug1Proxy, WifiDebugDump1Proxy, WifiPowerManagement1Proxy,
 };
 use steamos_manager::wifi::{WifiBackend, WifiDebugMode, WifiPowerManagement};
 use zbus::fdo::{IntrospectableProxy, PropertiesProxy};
@@ -110,6 +110,21 @@ enum Commands {
 
     /// Get the minimum allowed TDP limit
     GetTDPLimitMin,
+
+    /// Get the performance profiles supported on this device
+    GetAvailablePerformanceProfiles,
+
+    /// Get the current performance profile
+    GetPerformanceProfile,
+
+    /// Set the performance profile
+    SetPerformanceProfile {
+        /// Valid profiles can be found using get-available-performance-profiles.
+        profile: String,
+    },
+
+    /// Get the suggested default performance profile
+    SuggestedDefaultPerformanceProfile,
 
     /// Set the Wi-Fi backend, if possible
     SetWifiBackend {
@@ -347,6 +362,28 @@ async fn main() -> Result<()> {
             let proxy = GpuPerformanceLevel1Proxy::new(&conn).await?;
             let value = proxy.manual_gpu_clock_min().await?;
             println!("Manual GPU Clock Min: {value}");
+        }
+        Commands::GetAvailablePerformanceProfiles => {
+            let proxy = PerformanceProfile1Proxy::new(&conn).await?;
+            let profiles = proxy.available_performance_profiles().await?;
+            println!("Profiles:\n");
+            for name in profiles.into_iter().sorted() {
+                println!("- {name}");
+            }
+        }
+        Commands::GetPerformanceProfile => {
+            let proxy = PerformanceProfile1Proxy::new(&conn).await?;
+            let profile = proxy.performance_profile().await?;
+            println!("Performance Profile: {profile}");
+        }
+        Commands::SetPerformanceProfile { profile } => {
+            let proxy = PerformanceProfile1Proxy::new(&conn).await?;
+            proxy.set_performance_profile(profile.as_str()).await?;
+        }
+        Commands::SuggestedDefaultPerformanceProfile => {
+            let proxy = PerformanceProfile1Proxy::new(&conn).await?;
+            let profile = proxy.suggested_default_performance_profile().await?;
+            println!("Suggested Default Performance Profile: {profile}");
         }
         Commands::SetTDPLimit { limit } => {
             let proxy = TdpLimit1Proxy::new(&conn).await?;
