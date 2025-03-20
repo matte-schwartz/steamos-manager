@@ -422,10 +422,10 @@ pub(crate) async fn get_tdp_limit_range() -> Result<(u32, u32)> {
 }
 
 pub(crate) async fn get_max_charge_level() -> Result<i32> {
-    let config = platform_config()
-        .await?
+    let config = platform_config().await?;
+    let config = config
         .as_ref()
-        .and_then(|config| config.battery_charge_limit.clone())
+        .and_then(|config| config.battery_charge_limit.as_ref())
         .ok_or(anyhow!("No battery charge limit configured"))?;
     let base = find_hwmon(config.hwmon_name.as_str()).await?;
 
@@ -440,10 +440,10 @@ pub(crate) async fn get_max_charge_level() -> Result<i32> {
 pub(crate) async fn set_max_charge_level(limit: i32) -> Result<()> {
     ensure!((0..=100).contains(&limit), "Invalid limit");
     let data = limit.to_string();
-    let config = platform_config()
-        .await?
+    let config = platform_config().await?;
+    let config = config
         .as_ref()
-        .and_then(|config| config.battery_charge_limit.clone())
+        .and_then(|config| config.battery_charge_limit.as_ref())
         .ok_or(anyhow!("No battery charge limit configured"))?;
     let base = find_hwmon(config.hwmon_name.as_str()).await?;
 
