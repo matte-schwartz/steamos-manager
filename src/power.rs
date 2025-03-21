@@ -9,6 +9,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use regex::Regex;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use strum::{Display, EnumString};
@@ -255,13 +256,13 @@ pub(crate) async fn set_cpu_scaling_governor(governor: CPUScalingGovernor) -> Re
     write_cpu_governor_sysfs_contents(name).await
 }
 
-pub(crate) async fn get_gpu_clocks_range() -> Result<(u32, u32)> {
+pub(crate) async fn get_gpu_clocks_range() -> Result<RangeInclusive<u32>> {
     if let Some(range) = platform_config()
         .await?
         .as_ref()
         .and_then(|config| config.gpu_clocks)
     {
-        return Ok((range.min, range.max));
+        return Ok(range.min..=range.max);
     }
     let contents = read_gpu_sysfs_contents(GPU_CLOCK_LEVELS_SUFFIX).await?;
     let lines = contents.lines();
@@ -284,7 +285,7 @@ pub(crate) async fn get_gpu_clocks_range() -> Result<(u32, u32)> {
     }
 
     ensure!(min <= max, "Could not read any clocks");
-    Ok((min, max))
+    Ok(min..=max)
 }
 
 pub(crate) async fn set_gpu_clocks(clocks: u32) -> Result<()> {
@@ -371,9 +372,10 @@ pub(crate) async fn get_tdp_limit() -> Result<u32> {
 }
 
 pub(crate) async fn set_tdp_limit(limit: u32) -> Result<()> {
-    // Set TDP limit given if within range (3-15)
-    // Returns false on error or out of range
-    ensure!((3..=15).contains(&limit), "Invalid limit");
+    ensure!(
+        get_tdp_limit_range().await?.contains(&limit),
+        "Invalid limit"
+    );
     let data = format!("{limit}000000");
 
     let base = find_hwmon(GPU_HWMON_NAME).await?;
@@ -393,13 +395,13 @@ pub(crate) async fn set_tdp_limit(limit: u32) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn get_tdp_limit_range() -> Result<(u32, u32)> {
+pub(crate) async fn get_tdp_limit_range() -> Result<RangeInclusive<u32>> {
     let range = platform_config()
         .await?
         .as_ref()
         .and_then(|config| config.tdp_limit)
         .ok_or(anyhow!("No TDP limit range configured"))?;
-    Ok((range.min, range.max))
+    Ok(range.min..=range.max)
 }
 
 pub(crate) async fn get_max_charge_level() -> Result<i32> {
@@ -438,7 +440,7 @@ pub(crate) mod test {
     use super::*;
     use crate::hardware::test::fake_model;
     use crate::hardware::SteamDeckVariant;
-    use crate::platform::{BatteryChargeLimitConfig, PlatformConfig};
+    use crate::platform::{BatteryChargeLimitConfig, PlatformConfig, RangeConfig};
     use crate::{enum_roundtrip, testing};
     use anyhow::anyhow;
     use tokio::fs::{create_dir_all, read_to_string, remove_dir, write};
@@ -623,7 +625,14 @@ CCLK_RANGE in Core0:
 
     #[tokio::test]
     async fn test_set_tdp_limit() {
-        let _h = testing::start();
+        let handle = testing::start();
+
+        let mut platform_config = PlatformConfig::default();
+        platform_config.tdp_limit = Some(RangeConfig {
+            min: 3,
+            max: 15,
+        });
+        handle.test.platform_config.replace(Some(platform_config));
 
         assert_eq!(
             set_tdp_limit(2).await.unwrap_err().to_string(),
@@ -736,13 +745,13 @@ CCLK_RANGE in Core0:
 1: 1100Mhz
 2: 1600Mhz";
         write(filename.as_path(), contents).await.expect("write");
-        assert_eq!(get_gpu_clocks_range().await.unwrap(), (200, 1600));
+        assert_eq!(get_gpu_clocks_range().await.unwrap(), 200..=1600);
 
         let contents = "0: 1600Mhz *
 1: 200Mhz
 2: 1100Mhz";
         write(filename.as_path(), contents).await.expect("write");
-        assert_eq!(get_gpu_clocks_range().await.unwrap(), (200, 1600));
+        assert_eq!(get_gpu_clocks_range().await.unwrap(), 200..=1600);
     }
 
     #[test]

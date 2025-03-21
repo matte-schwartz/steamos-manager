@@ -363,12 +363,18 @@ impl GpuPerformanceLevel1 {
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn manual_gpu_clock_min(&self) -> fdo::Result<u32> {
-        Ok(get_gpu_clocks_range().await.map_err(to_zbus_fdo_error)?.0)
+        Ok(*get_gpu_clocks_range()
+            .await
+            .map_err(to_zbus_fdo_error)?
+            .start())
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn manual_gpu_clock_max(&self) -> fdo::Result<u32> {
-        Ok(get_gpu_clocks_range().await.map_err(to_zbus_fdo_error)?.1)
+        Ok(*get_gpu_clocks_range()
+            .await
+            .map_err(to_zbus_fdo_error)?
+            .end())
     }
 }
 
@@ -480,12 +486,12 @@ impl TdpLimit1 {
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn tdp_limit_min(&self) -> u32 {
-        get_tdp_limit_range().await.map(|(min, _)| min).unwrap_or(0)
+        get_tdp_limit_range().await.map(|r| *r.start()).unwrap_or(0)
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn tdp_limit_max(&self) -> u32 {
-        get_tdp_limit_range().await.map(|(_, max)| max).unwrap_or(0)
+        get_tdp_limit_range().await.map(|r| *r.end()).unwrap_or(0)
     }
 }
 
