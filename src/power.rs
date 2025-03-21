@@ -1099,21 +1099,13 @@ CCLK_RANGE in Core0:
     async fn read_max_charge_level() {
         let handle = testing::start();
 
-        let platform_config = Some(PlatformConfig {
-            factory_reset: None,
-            update_bios: None,
-            update_dock: None,
-            storage: None,
-            fan_control: None,
-            tdp_limit: None,
-            gpu_clocks: None,
-            battery_charge_limit: Some(BatteryChargeLimitConfig {
-                suggested_minimum_limit: Some(10),
-                hwmon_name: String::from("steamdeck_hwmon"),
-                attribute: String::from("max_battery_charge_level"),
-            }),
+        let mut platform_config = PlatformConfig::default();
+        platform_config.battery_charge_limit = Some(BatteryChargeLimitConfig {
+            suggested_minimum_limit: Some(10),
+            hwmon_name: String::from("steamdeck_hwmon"),
+            attribute: String::from("max_battery_charge_level"),
         });
-        handle.test.platform_config.replace(platform_config);
+        handle.test.platform_config.replace(Some(platform_config));
 
         let base = path(HWMON_PREFIX).join("hwmon6");
         create_dir_all(&base).await.expect("create_dir_all");
