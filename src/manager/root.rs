@@ -27,8 +27,8 @@ use crate::job::JobManager;
 use crate::platform::platform_config;
 use crate::power::{
     set_cpu_scaling_governor, set_gpu_clocks, set_gpu_performance_level, set_gpu_power_profile,
-    set_max_charge_level, set_platform_profile, set_tdp_limit, CPUScalingGovernor,
-    GPUPerformanceLevel, GPUPowerProfile,
+    set_max_charge_level, set_platform_profile, tdp_limit_manager, CPUScalingGovernor,
+    GPUPerformanceLevel, GPUPowerProfile, TdpLimitManager,
 };
 use crate::process::{run_script, script_output};
 use crate::wifi::{
@@ -70,6 +70,7 @@ pub struct SteamOSManager {
     channel: Sender<Command>,
     wifi_debug_mode: WifiDebugMode,
     fan_control: FanControl,
+    tdp_limit_manager: Option<Box<dyn TdpLimitManager>>,
     // Whether we should use trace-cmd or not.
     // True on galileo devices, false otherwise
     should_trace: bool,
@@ -81,6 +82,7 @@ impl SteamOSManager {
         Ok(SteamOSManager {
             fan_control: FanControl::new(connection.clone()),
             wifi_debug_mode: WifiDebugMode::Off,
+            tdp_limit_manager: tdp_limit_manager().await.ok(),
             should_trace: steam_deck_variant().await? == SteamDeckVariant::Galileo,
             job_manager: JobManager::new(connection.clone()).await?,
             connection,
@@ -301,7 +303,15 @@ impl SteamOSManager {
     }
 
     async fn set_tdp_limit(&self, limit: u32) -> fdo::Result<()> {
-        set_tdp_limit(limit).await.map_err(to_zbus_fdo_error)
+        let Some(ref manager) = self.tdp_limit_manager else {
+            return Err(fdo::Error::Failed(String::from(
+                "TDP limiting not configured",
+            )));
+        };
+        manager
+            .set_tdp_limit(limit)
+            .await
+            .map_err(to_zbus_fdo_error)
     }
 
     #[zbus(property)]

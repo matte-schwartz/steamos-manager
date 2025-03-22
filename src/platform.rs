@@ -8,10 +8,12 @@
 use anyhow::Result;
 use nix::errno::Errno;
 use nix::unistd::{access, AccessFlags};
-use serde::Deserialize;
+use serde::de::Error;
+use serde::{Deserialize, Deserializer};
 use std::io::ErrorKind;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
+use strum::VariantNames;
 use tokio::fs::{metadata, read_to_string};
 #[cfg(not(test))]
 use tokio::sync::OnceCell;
@@ -19,6 +21,7 @@ use tokio::task::spawn_blocking;
 
 #[cfg(not(test))]
 use crate::hardware::{device_type, DeviceType};
+use crate::power::TdpLimitingMethod;
 
 #[cfg(not(test))]
 static CONFIG: OnceCell<Option<PlatformConfig>> = OnceCell::const_new();
@@ -31,7 +34,7 @@ pub(crate) struct PlatformConfig {
     pub update_dock: Option<ScriptConfig>,
     pub storage: Option<StorageConfig>,
     pub fan_control: Option<ServiceConfig>,
-    pub tdp_limit: Option<RangeConfig<u32>>,
+    pub tdp_limit: Option<TdpLimitConfig>,
     pub gpu_clocks: Option<RangeConfig<u32>>,
     pub battery_charge_limit: Option<BatteryChargeLimitConfig>,
     pub performance_profile: Option<PerformanceProfileConfig>,
@@ -120,6 +123,13 @@ pub(crate) struct PerformanceProfileConfig {
     pub platform_profile_name: String,
 }
 
+#[derive(Clone, Deserialize, Debug)]
+pub(crate) struct TdpLimitConfig {
+    #[serde(deserialize_with = "de_tdp_limiter_method")]
+    pub method: TdpLimitingMethod,
+    pub range: Option<RangeConfig<u32>>,
+}
+
 #[derive(Clone, Default, Deserialize, Debug)]
 pub(crate) struct FormatDeviceConfig {
     pub script: PathBuf,
@@ -169,6 +179,16 @@ impl PlatformConfig {
             }
         }
     }
+}
+
+fn de_tdp_limiter_method<'de, D>(deserializer: D) -> Result<TdpLimitingMethod, D::Error>
+where
+    D: Deserializer<'de>,
+    D::Error: Error,
+{
+    let string = String::deserialize(deserializer)?;
+    TdpLimitingMethod::try_from(string.as_str())
+        .map_err(|_| D::Error::unknown_variant(string.as_str(), TdpLimitingMethod::VARIANTS))
 }
 
 #[cfg(not(test))]

@@ -28,7 +28,7 @@ use crate::power::{
     get_available_cpu_scaling_governors, get_available_gpu_performance_levels,
     get_available_gpu_power_profiles, get_available_platform_profiles, get_cpu_scaling_governor,
     get_gpu_clocks, get_gpu_clocks_range, get_gpu_performance_level, get_gpu_power_profile,
-    get_max_charge_level, get_platform_profile, get_tdp_limit, get_tdp_limit_range,
+    get_max_charge_level, get_platform_profile, tdp_limit_manager, TdpLimitManager,
 };
 use crate::wifi::{
     get_wifi_backend, get_wifi_power_management_state, list_wifi_interfaces, WifiBackend,
@@ -132,6 +132,7 @@ struct GpuPowerProfile1 {
 
 struct TdpLimit1 {
     proxy: Proxy<'static>,
+    manager: Box<dyn TdpLimitManager>,
 }
 
 struct HdmiCec1 {
@@ -528,7 +529,7 @@ impl Storage1 {
 impl TdpLimit1 {
     #[zbus(property(emits_changed_signal = "false"))]
     async fn tdp_limit(&self) -> u32 {
-        get_tdp_limit().await.unwrap_or(0)
+        self.manager.get_tdp_limit().await.unwrap_or(0)
     }
 
     #[zbus(property)]
@@ -538,12 +539,20 @@ impl TdpLimit1 {
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn tdp_limit_min(&self) -> u32 {
-        get_tdp_limit_range().await.map(|r| *r.start()).unwrap_or(0)
+        self.manager
+            .get_tdp_limit_range()
+            .await
+            .map(|r| *r.start())
+            .unwrap_or(0)
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
     async fn tdp_limit_max(&self) -> u32 {
-        get_tdp_limit_range().await.map(|r| *r.end()).unwrap_or(0)
+        self.manager
+            .get_tdp_limit_range()
+            .await
+            .map(|r| *r.end())
+            .unwrap_or(0)
     }
 }
 
@@ -741,9 +750,6 @@ pub(crate) async fn create_interfaces(
         proxy: proxy.clone(),
         channel: daemon,
     };
-    let tdp_limit = TdpLimit1 {
-        proxy: proxy.clone(),
-    };
     let wifi_debug = WifiDebug1 {
         proxy: proxy.clone(),
     };
@@ -796,8 +802,16 @@ pub(crate) async fn create_interfaces(
 
     object_server.at(MANAGER_PATH, manager2).await?;
 
-    if get_tdp_limit().await.is_ok() {
-        object_server.at(MANAGER_PATH, tdp_limit).await?;
+    if let Ok(manager) = tdp_limit_manager().await {
+        object_server
+            .at(
+                MANAGER_PATH,
+                TdpLimit1 {
+                    proxy: proxy.clone(),
+                    manager,
+                },
+            )
+            .await?;
     }
 
     if steam_deck_variant().await.unwrap_or_default() == SteamDeckVariant::Galileo {
@@ -822,8 +836,9 @@ mod test {
     use crate::hardware::SteamDeckVariant;
     use crate::platform::{
         BatteryChargeLimitConfig, PerformanceProfileConfig, PlatformConfig, RangeConfig,
-        ResetConfig, ScriptConfig, ServiceConfig, StorageConfig,
+        ResetConfig, ScriptConfig, ServiceConfig, StorageConfig, TdpLimitConfig,
     };
+    use crate::power::TdpLimitingMethod;
     use crate::systemd::test::{MockManager, MockUnit};
     use crate::{path, power, testing};
 
@@ -849,7 +864,10 @@ mod test {
             fan_control: Some(ServiceConfig::Systemd(String::from(
                 "jupiter-fan-control.service",
             ))),
-            tdp_limit: Some(RangeConfig::new(3, 15)),
+            tdp_limit: Some(TdpLimitConfig {
+                method: TdpLimitingMethod::GpuHwmon,
+                range: Some(RangeConfig::new(3, 15)),
+            }),
             gpu_clocks: Some(RangeConfig::new(200, 1600)),
             battery_charge_limit: Some(BatteryChargeLimitConfig {
                 suggested_minimum_limit: Some(10),

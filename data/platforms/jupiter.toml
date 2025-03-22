@@ -30,6 +30,9 @@ no_validate_flag = "--skip-validation"
 systemd = "jupiter-fan-control.service"
 
 [tdp_limit]
+method = "gpu_hwmon"
+
+[tdp_limit.range]
 min = 3
 max = 15
 

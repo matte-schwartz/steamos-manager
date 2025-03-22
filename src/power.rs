@@ -6,13 +6,14 @@
  */
 
 use anyhow::{anyhow, bail, ensure, Result};
+use async_trait::async_trait;
 use lazy_static::lazy_static;
 use num_enum::TryFromPrimitive;
 use regex::Regex;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use strum::{Display, EnumString};
+use strum::{Display, EnumString, VariantNames};
 use tokio::fs::{self, try_exists, File};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{error, warn};
@@ -86,6 +87,34 @@ pub enum CPUScalingGovernor {
     PowerSave,
     Performance,
     SchedUtil,
+}
+
+#[derive(Display, EnumString, VariantNames, PartialEq, Debug, Copy, Clone)]
+#[strum(serialize_all = "snake_case")]
+pub enum TdpLimitingMethod {
+    GpuHwmon,
+}
+
+#[derive(Debug)]
+pub(crate) struct GpuHwmonTdpLimitManager {}
+
+#[async_trait]
+pub(crate) trait TdpLimitManager: Send + Sync {
+    async fn get_tdp_limit(&self) -> Result<u32>;
+    async fn set_tdp_limit(&self, limit: u32) -> Result<()>;
+    async fn get_tdp_limit_range(&self) -> Result<RangeInclusive<u32>>;
+}
+
+pub(crate) async fn tdp_limit_manager() -> Result<Box<dyn TdpLimitManager>> {
+    let config = platform_config().await?;
+    let config = config
+        .as_ref()
+        .and_then(|config| config.tdp_limit.as_ref())
+        .ok_or(anyhow!("No TDP limit configured"))?;
+
+    Ok(match config.method {
+        TdpLimitingMethod::GpuHwmon => Box::new(GpuHwmonTdpLimitManager {}),
+    })
 }
 
 async fn read_gpu_sysfs_contents<S: AsRef<Path>>(suffix: S) -> Result<String> {
@@ -374,44 +403,52 @@ async fn find_platform_profile(name: &str) -> Result<PathBuf> {
     find_sysdir(path(PLATFORM_PROFILE_PREFIX), name).await
 }
 
-pub(crate) async fn get_tdp_limit() -> Result<u32> {
-    let base = find_hwmon(GPU_HWMON_NAME).await?;
-    let power1cap = fs::read_to_string(base.join(TDP_LIMIT1)).await?;
-    let power1cap: u32 = power1cap.trim_end().parse()?;
-    Ok(power1cap / 1_000_000)
-}
-
-pub(crate) async fn set_tdp_limit(limit: u32) -> Result<()> {
-    ensure!(
-        get_tdp_limit_range().await?.contains(&limit),
-        "Invalid limit"
-    );
-    let data = format!("{limit}000000");
-
-    let base = find_hwmon(GPU_HWMON_NAME).await?;
-    write_synced(base.join(TDP_LIMIT1), data.as_bytes())
-        .await
-        .inspect_err(|message| {
-            error!("Error opening sysfs power1_cap file for writing TDP limits {message}");
-        })?;
-
-    if let Ok(mut power2file) = File::create(base.join(TDP_LIMIT2)).await {
-        power2file
-            .write(data.as_bytes())
-            .await
-            .inspect_err(|message| error!("Error writing to power2_cap file: {message}"))?;
-        power2file.flush().await?;
+#[async_trait]
+impl TdpLimitManager for GpuHwmonTdpLimitManager {
+    async fn get_tdp_limit(&self) -> Result<u32> {
+        let base = find_hwmon(GPU_HWMON_NAME).await?;
+        let power1cap = fs::read_to_string(base.join(TDP_LIMIT1)).await?;
+        let power1cap: u32 = power1cap.trim_end().parse()?;
+        Ok(power1cap / 1_000_000)
     }
-    Ok(())
-}
 
-pub(crate) async fn get_tdp_limit_range() -> Result<RangeInclusive<u32>> {
-    let range = platform_config()
-        .await?
-        .as_ref()
-        .and_then(|config| config.tdp_limit)
-        .ok_or(anyhow!("No TDP limit range configured"))?;
-    Ok(range.min..=range.max)
+    async fn set_tdp_limit(&self, limit: u32) -> Result<()> {
+        ensure!(
+            self.get_tdp_limit_range().await?.contains(&limit),
+            "Invalid limit"
+        );
+
+        let data = format!("{limit}000000");
+
+        let base = find_hwmon(GPU_HWMON_NAME).await?;
+        write_synced(base.join(TDP_LIMIT1), data.as_bytes())
+            .await
+            .inspect_err(|message| {
+                error!("Error opening sysfs power1_cap file for writing TDP limits {message}");
+            })?;
+
+        if let Ok(mut power2file) = File::create(base.join(TDP_LIMIT2)).await {
+            power2file
+                .write(data.as_bytes())
+                .await
+                .inspect_err(|message| error!("Error writing to power2_cap file: {message}"))?;
+            power2file.flush().await?;
+        }
+        Ok(())
+    }
+
+    async fn get_tdp_limit_range(&self) -> Result<RangeInclusive<u32>> {
+        let config = platform_config().await?;
+        let config = config
+            .as_ref()
+            .and_then(|config| config.tdp_limit.as_ref())
+            .ok_or(anyhow!("No TDP limit configured"))?;
+
+        if let Some(range) = config.range {
+            return Ok(range.min..=range.max);
+        }
+        bail!("No TDP limit range configured");
+    }
 }
 
 pub(crate) async fn get_max_charge_level() -> Result<i32> {
@@ -477,7 +514,7 @@ pub(crate) mod test {
     use super::*;
     use crate::hardware::test::fake_model;
     use crate::hardware::SteamDeckVariant;
-    use crate::platform::{BatteryChargeLimitConfig, PlatformConfig, RangeConfig};
+    use crate::platform::{BatteryChargeLimitConfig, PlatformConfig, RangeConfig, TdpLimitConfig};
     use crate::{enum_roundtrip, testing};
     use anyhow::anyhow;
     use tokio::fs::{create_dir_all, read_to_string, remove_dir, write};
@@ -651,41 +688,53 @@ CCLK_RANGE in Core0:
     }
 
     #[tokio::test]
-    async fn test_get_tdp_limit() {
-        let _h = testing::start();
+    async fn test_gpu_hwmon_get_tdp_limit() {
+        let handle = testing::start();
+
+        let mut platform_config = PlatformConfig::default();
+        platform_config.tdp_limit = Some(TdpLimitConfig {
+            method: TdpLimitingMethod::GpuHwmon,
+            range: Some(RangeConfig { min: 3, max: 15 }),
+        });
+        handle.test.platform_config.replace(Some(platform_config));
+        let manager = tdp_limit_manager().await.unwrap();
 
         setup().await.expect("setup");
         let hwmon = path(HWMON_PREFIX);
 
-        assert!(get_tdp_limit().await.is_err());
+        assert!(manager.get_tdp_limit().await.is_err());
 
         write(hwmon.join("hwmon5").join(TDP_LIMIT1), "15000000\n")
             .await
             .expect("write");
-        assert_eq!(get_tdp_limit().await.unwrap(), 15);
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
     }
 
     #[tokio::test]
-    async fn test_set_tdp_limit() {
+    async fn test_gpu_hwmon_set_tdp_limit() {
         let handle = testing::start();
 
         let mut platform_config = PlatformConfig::default();
-        platform_config.tdp_limit = Some(RangeConfig { min: 3, max: 15 });
+        platform_config.tdp_limit = Some(TdpLimitConfig {
+            method: TdpLimitingMethod::GpuHwmon,
+            range: Some(RangeConfig { min: 3, max: 15 }),
+        });
         handle.test.platform_config.replace(Some(platform_config));
+        let manager = tdp_limit_manager().await.unwrap();
 
         assert_eq!(
-            set_tdp_limit(2).await.unwrap_err().to_string(),
+            manager.set_tdp_limit(2).await.unwrap_err().to_string(),
             anyhow!("Invalid limit").to_string()
         );
         assert_eq!(
-            set_tdp_limit(20).await.unwrap_err().to_string(),
+            manager.set_tdp_limit(20).await.unwrap_err().to_string(),
             anyhow!("Invalid limit").to_string()
         );
-        assert!(set_tdp_limit(10).await.is_err());
+        assert!(manager.set_tdp_limit(10).await.is_err());
 
         let hwmon = path(HWMON_PREFIX);
         assert_eq!(
-            set_tdp_limit(10).await.unwrap_err().to_string(),
+            manager.set_tdp_limit(10).await.unwrap_err().to_string(),
             anyhow!("No such file or directory (os error 2)").to_string()
         );
 
@@ -698,7 +747,7 @@ CCLK_RANGE in Core0:
             .await
             .expect("create_dir_all");
         assert_eq!(
-            set_tdp_limit(10).await.unwrap_err().to_string(),
+            manager.set_tdp_limit(10).await.unwrap_err().to_string(),
             anyhow!("Is a directory (os error 21)").to_string()
         );
 
@@ -706,7 +755,7 @@ CCLK_RANGE in Core0:
             .await
             .expect("remove_dir");
         write(hwmon.join(TDP_LIMIT1), "0").await.expect("write");
-        assert!(set_tdp_limit(10).await.is_ok());
+        assert!(manager.set_tdp_limit(10).await.is_ok());
         let power1_cap = read_to_string(hwmon.join(TDP_LIMIT1))
             .await
             .expect("power1_cap");
@@ -716,7 +765,7 @@ CCLK_RANGE in Core0:
             .await
             .expect("remove_dir");
         write(hwmon.join(TDP_LIMIT2), "0").await.expect("write");
-        assert!(set_tdp_limit(15).await.is_ok());
+        assert!(manager.set_tdp_limit(15).await.is_ok());
         let power1_cap = read_to_string(hwmon.join(TDP_LIMIT1))
             .await
             .expect("power1_cap");
