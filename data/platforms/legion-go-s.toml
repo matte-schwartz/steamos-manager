@@ -1,3 +1,6 @@
 [performance_profile]
 platform_profile_name = "lenovo-wmi-gamezone"
 suggested_default = "custom"
+
+[tdp_limit]
+method = "lenovo_wmi"
