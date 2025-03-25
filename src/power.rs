@@ -628,10 +628,7 @@ CCLK_RANGE in Core0:
         let handle = testing::start();
 
         let mut platform_config = PlatformConfig::default();
-        platform_config.tdp_limit = Some(RangeConfig {
-            min: 3,
-            max: 15,
-        });
+        platform_config.tdp_limit = Some(RangeConfig { min: 3, max: 15 });
         handle.test.platform_config.replace(Some(platform_config));
 
         assert_eq!(
