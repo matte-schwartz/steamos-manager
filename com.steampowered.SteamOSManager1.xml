@@ -175,7 +175,7 @@
 
         Enumerate the supported GPU power profiles available on the system.
 
-        A list of supported profiles, as a dictionary of values to names.
+        A list of supported profiles.
     -->
     <property name="AvailableGpuPowerProfiles" type="as" access="read"/>
 
