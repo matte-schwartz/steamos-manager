@@ -233,7 +233,7 @@ mod test {
         )
         .expect("trace_pipe");
         let dbus = h.new_dbus().await.expect("dbus");
-        let _ftrace = Ftrace::init(dbus).await.expect("ftrace");
+        let _ftrace = Ftrace::init(&dbus).await.expect("ftrace");
 
         assert_eq!(
             read_to_string(tracefs.join("events/oom/mark_victim/enable"))
@@ -264,7 +264,7 @@ mod test {
         )
         .expect("trace_pipe");
         let dbus = h.new_dbus().await.expect("dbus");
-        let _ftrace = Ftrace::init(dbus).await.expect("ftrace");
+        let _ftrace = Ftrace::init(&dbus).await.expect("ftrace");
 
         assert_eq!(
             read_to_string(tracefs.join("events/oom/mark_victim/enable"))
@@ -326,7 +326,7 @@ mod test {
             .build()
             .await
             .expect("dbus");
-        let mut ftrace = Ftrace::init(dbus).await.expect("ftrace");
+        let mut ftrace = Ftrace::init(&dbus).await.expect("ftrace");
 
         assert!(match receiver.try_recv() {
             Err(error::TryRecvError::Empty) => true,
