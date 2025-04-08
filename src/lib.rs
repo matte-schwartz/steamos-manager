@@ -20,6 +20,7 @@ use tracing::{debug, error, info, warn};
 
 mod ds_inhibit;
 mod error;
+mod inputplumber;
 mod job;
 mod manager;
 mod platform;
