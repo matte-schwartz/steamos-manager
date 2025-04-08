@@ -58,7 +58,7 @@ async fn setup_traces(base: &Path) -> Result<()> {
 }
 
 impl Ftrace {
-    pub async fn init(connection: Connection) -> Result<Ftrace> {
+    pub async fn init(connection: &Connection) -> Result<Ftrace> {
         let path = Self::base();
         fs::create_dir_all(&path).await?;
         setup_traces(path.as_path()).await?;
@@ -67,7 +67,7 @@ impl Ftrace {
             .open_receiver(path.join("trace_pipe"))?;
         Ok(Ftrace {
             pipe: Some(BufReader::new(file)),
-            proxy: TraceHelperProxy::new(&connection).await?,
+            proxy: TraceHelperProxy::new(connection).await?,
         })
     }
 

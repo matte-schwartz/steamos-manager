@@ -120,7 +120,7 @@ impl DaemonContext for RootContext {
         self.state = state;
 
         let connection = daemon.get_connection();
-        let ftrace = Ftrace::init(connection).await?;
+        let ftrace = Ftrace::init(&connection).await?;
         daemon.add_service(ftrace);
 
         self.reload_ds_inhibit(daemon).await?;
