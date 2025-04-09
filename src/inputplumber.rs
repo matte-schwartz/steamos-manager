@@ -55,9 +55,9 @@ impl DeckService {
     async fn check_devices(&self, object_manager: &ObjectManagerProxy<'_>) -> Result<()> {
         if device_type().await.unwrap_or(DeviceType::Unknown) == DeviceType::LegionGoS {
             // There is a bug on the Legion Go S where querying this information
-            // messes up the mapping for the `deck` target device. It's not clear
-            // exactly what's causing this, so we just skip on the Legion Go S
-            // since it makes a `deck` target device by default.
+            // messes up the mapping for the `deck-uhid` target device. It's not
+            // clear exactly what's causing this, so we just skip on the Legion
+            // Go S since it makes a `deck-uhid` target device by default.
             return Ok(());
         }
         for (path, ifaces) in object_manager.get_managed_objects().await?.into_iter() {
@@ -90,7 +90,7 @@ impl DeckService {
             .path(targets[0].as_str())?
             .build()
             .await?;
-        Ok(target.device_type().await? == "deck")
+        Ok(target.device_type().await? == "deck-uhid")
     }
 
     async fn make_deck(&self, path: &ObjectPath<'_>) -> Result<()> {
@@ -105,10 +105,10 @@ impl DeckService {
             .build()
             .await?;
         if !self.is_deck(&proxy).await? {
-            debug!("Changing CompositeDevice {} into `deck` type", path);
-            proxy.set_target_devices(&["deck"]).await
+            debug!("Changing CompositeDevice {} into `deck-uhid` type", path);
+            proxy.set_target_devices(&["deck-uhid"]).await
         } else {
-            debug!("CompositeDevice {} is already `deck` type", path);
+            debug!("CompositeDevice {} is already `deck-uhid` type", path);
             Ok(())
         }
     }
