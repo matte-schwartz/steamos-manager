@@ -107,6 +107,9 @@ pub(crate) trait TdpLimitManager: Send + Sync {
     async fn get_tdp_limit(&self) -> Result<u32>;
     async fn set_tdp_limit(&self, limit: u32) -> Result<()>;
     async fn get_tdp_limit_range(&self) -> Result<RangeInclusive<u32>>;
+    async fn is_active(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 pub(crate) async fn tdp_limit_manager() -> Result<Box<dyn TdpLimitManager>> {
@@ -530,6 +533,18 @@ impl TdpLimitManager for LenovoWmiTdpLimitManager {
             .parse()
             .map_err(|e| anyhow!("Error parsing value: {e}"))?;
         Ok(min..=max)
+    }
+
+    async fn is_active(&self) -> Result<bool> {
+        let config = platform_config().await?;
+        if let Some(config) = config
+            .as_ref()
+            .and_then(|config| config.performance_profile.as_ref())
+        {
+            Ok(get_platform_profile(&config.platform_profile_name).await? == "custom")
+        } else {
+            Ok(true)
+        }
     }
 }
 

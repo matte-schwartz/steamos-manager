@@ -146,6 +146,7 @@ struct Manager2 {
 
 struct PerformanceProfile1 {
     proxy: Proxy<'static>,
+    tdp_limit_manager: Option<Box<dyn TdpLimitManager>>,
 }
 
 struct Storage1 {
@@ -492,8 +493,29 @@ impl PerformanceProfile1 {
     }
 
     #[zbus(property)]
-    async fn set_performance_profile(&self, profile: &str) -> zbus::Result<()> {
-        self.proxy.call("SetPerformanceProfile", &(profile)).await
+    async fn set_performance_profile(
+        &self,
+        profile: &str,
+        #[zbus(connection)] connection: &Connection,
+    ) -> zbus::Result<()> {
+        let _: () = self.proxy.call("SetPerformanceProfile", &(profile)).await?;
+        if self.tdp_limit_manager.is_some() {
+            let connection = connection.clone();
+            let manager = tdp_limit_manager().await.map_err(to_zbus_error)?;
+            let proxy = self.proxy.clone();
+            tokio::spawn(async move {
+                if manager.is_active().await.map_err(to_zbus_error)? {
+                    let tdp_limit = TdpLimit1 { proxy, manager };
+                    connection.object_server().at(MANAGER_PATH, tdp_limit).await
+                } else {
+                    connection
+                        .object_server()
+                        .remove::<TdpLimit1, _>(MANAGER_PATH)
+                        .await
+                }
+            });
+        }
+        Ok(())
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
@@ -654,6 +676,7 @@ async fn create_config_interfaces(
     };
     let performance_profile = PerformanceProfile1 {
         proxy: proxy.clone(),
+        tdp_limit_manager: tdp_limit_manager().await.ok(),
     };
     let storage = Storage1 {
         proxy: proxy.clone(),
@@ -674,6 +697,20 @@ async fn create_config_interfaces(
 
     if config.fan_control.is_some() {
         object_server.at(MANAGER_PATH, fan_control).await?;
+    }
+
+    if let Ok(manager) = tdp_limit_manager().await {
+        if manager.is_active().await? {
+            object_server
+                .at(
+                    MANAGER_PATH,
+                    TdpLimit1 {
+                        proxy: proxy.clone(),
+                        manager,
+                    },
+                )
+                .await?;
+        }
     }
 
     if let Some(ref config) = config.performance_profile {
@@ -801,18 +838,6 @@ pub(crate) async fn create_interfaces(
     }
 
     object_server.at(MANAGER_PATH, manager2).await?;
-
-    if let Ok(manager) = tdp_limit_manager().await {
-        object_server
-            .at(
-                MANAGER_PATH,
-                TdpLimit1 {
-                    proxy: proxy.clone(),
-                    manager,
-                },
-            )
-            .await?;
-    }
 
     if steam_deck_variant().await.unwrap_or_default() == SteamDeckVariant::Galileo {
         object_server.at(MANAGER_PATH, wifi_debug).await?;
