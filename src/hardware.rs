@@ -37,6 +37,7 @@ pub(crate) enum DeviceType {
     Unknown,
     SteamDeck,
     LegionGoS,
+    Claw,
 }
 
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone, TryFromPrimitive)]
@@ -82,6 +83,9 @@ pub(crate) async fn device_variant() -> Result<(DeviceType, String)> {
             (DeviceType::LegionGoS, product_name.to_string())
         }
         ("Valve", _, "Jupiter" | "Galileo") => (DeviceType::SteamDeck, board_name.to_string()),
+        ("Micro-Star International Co., Ltd.", "Claw 8 AI+ A2VM" | "Claw 7 AI+ A2VM" | "Claw A1M", _) => {
+            (DeviceType::Claw, product_name.to_string())
+        }
         _ => (DeviceType::Unknown, String::from("unknown")),
     })
 }
