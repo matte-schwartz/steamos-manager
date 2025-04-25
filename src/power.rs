@@ -304,9 +304,12 @@ impl GpuPerformanceLevelController for AmdGpuPerformanceController {
 
     async fn set_performance_level(&self, level: GPUPerformanceLevel) -> Result<()> {
         let level_str = level.to_string();
-        write_synced(self.hwmon_path.join(GPU_PERFORMANCE_LEVEL_SUFFIX), level_str.as_bytes())
-            .await
-            .map_err(|message| anyhow!("Error setting performance level: {message}"))
+        write_synced(
+            self.hwmon_path.join(GPU_PERFORMANCE_LEVEL_SUFFIX),
+            level_str.as_bytes(),
+        )
+        .await
+        .map_err(|message| anyhow!("Error setting performance level: {message}"))
     }
 
     async fn get_available_performance_levels(&self) -> Result<Vec<GPUPerformanceLevel>> {
@@ -343,17 +346,19 @@ impl GpuPerformanceLevelController for IntelGpuPerformanceController {
     async fn set_performance_level(&self, level: GPUPerformanceLevel) -> Result<()> {
         match level {
             GPUPerformanceLevel::Auto => {
-                // Auto mode: set to mid-range frequency
+                // Auto mode: reset min/max to hardware range for dynamic frequency adjustment
                 let range = self.clock_controller.get_clocks_range().await?;
                 let min = *range.start();
                 let max = *range.end();
-                let mid = min + (max - min) / 2;
-                self.clock_controller.set_clocks(mid).await
-            },
+
+                // Set min and max frequencies to hardware limits
+                self.clock_controller.set_min_clocks(min).await?;
+                self.clock_controller.set_max_clocks(max).await
+            }
             GPUPerformanceLevel::Manual => {
                 // Manual mode: do nothing, user will set specific frequency later
                 Ok(())
-            },
+            }
             _ => {
                 // Other modes not supported
                 bail!("Intel GPU only supports Auto and Manual performance levels")
@@ -363,24 +368,28 @@ impl GpuPerformanceLevelController for IntelGpuPerformanceController {
 
     async fn get_available_performance_levels(&self) -> Result<Vec<GPUPerformanceLevel>> {
         // Intel GPU only supports two modes
-        Ok(vec![
-            GPUPerformanceLevel::Auto,
-            GPUPerformanceLevel::Manual,
-        ])
+        Ok(vec![GPUPerformanceLevel::Auto, GPUPerformanceLevel::Manual])
     }
 }
 
 // Factory function to get appropriate GPU performance controller
 async fn get_gpu_performance_controller() -> Result<Box<dyn GpuPerformanceLevelController>> {
+    debug!("Getting GPU performance controller");
     // First try AMD GPU
     if let Ok(path) = find_hwmon(GPU_HWMON_NAME).await {
-        if try_exists(path.join(GPU_PERFORMANCE_LEVEL_SUFFIX)).await.unwrap_or(false) {
+        if try_exists(path.join(GPU_PERFORMANCE_LEVEL_SUFFIX))
+            .await
+            .unwrap_or(false)
+        {
             return Ok(Box::new(AmdGpuPerformanceController { hwmon_path: path }));
         }
     }
 
     // Then try Intel GPU
-    let controller = get_gpu_controller().await?;
+    debug!("Getting Intel GPU performance controller");
+    let controller = get_gpu_controller()
+        .await
+        .inspect_err(|message| error!("Error getting GPU controller: {message}"))?;
     Ok(Box::new(IntelGpuPerformanceController {
         clock_controller: controller,
     }))
@@ -441,6 +450,8 @@ trait GpuClockController: Send + Sync {
     async fn get_clocks_range(&self) -> Result<RangeInclusive<u32>>;
     async fn set_clocks(&self, clocks: u32) -> Result<()>;
     async fn get_clocks(&self) -> Result<u32>;
+    async fn set_min_clocks(&self, clocks: u32) -> Result<()>;
+    async fn set_max_clocks(&self, clocks: u32) -> Result<()>;
 }
 
 // AMD GPU controller implementation using HWMON
@@ -531,6 +542,54 @@ impl GpuClockController for AmdGpuController {
         }
         Ok(0)
     }
+
+    async fn set_min_clocks(&self, clocks: u32) -> Result<()> {
+        // For AMD GPUs, set the lower limit (s 0)
+        let mut myfile = File::create(self.hwmon_path.join(GPU_CLOCKS_SUFFIX))
+            .await
+            .inspect_err(|message| error!("Error opening sysfs file for writing: {message}"))?;
+
+        // s 0 sets the lower limit
+        let data = format!("s 0 {clocks}\n");
+        myfile
+            .write(data.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        myfile.flush().await?;
+
+        // Commit changes
+        myfile
+            .write("c\n".as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        myfile.flush().await?;
+
+        Ok(())
+    }
+
+    async fn set_max_clocks(&self, clocks: u32) -> Result<()> {
+        // For AMD GPUs, set the upper limit (s 1)
+        let mut myfile = File::create(self.hwmon_path.join(GPU_CLOCKS_SUFFIX))
+            .await
+            .inspect_err(|message| error!("Error opening sysfs file for writing: {message}"))?;
+
+        // s 1 sets the upper limit
+        let data = format!("s 1 {clocks}\n");
+        myfile
+            .write(data.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        myfile.flush().await?;
+
+        // Commit changes
+        myfile
+            .write("c\n".as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        myfile.flush().await?;
+
+        Ok(())
+    }
 }
 
 // Intel GPU controller implementation using i915 driver
@@ -592,6 +651,25 @@ impl GpuClockController for IntelI915Controller {
 
         Ok(cur_val)
     }
+
+    // New methods to set min and max clocks separately for i915
+    async fn set_min_clocks(&self, clocks: u32) -> Result<()> {
+        let min_path = self.path.join("gt_min_freq_mhz");
+        let clocks_str = clocks.to_string();
+
+        write_synced(min_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel min freq: {message}"))
+    }
+
+    async fn set_max_clocks(&self, clocks: u32) -> Result<()> {
+        let max_path = self.path.join("gt_max_freq_mhz");
+        let clocks_str = clocks.to_string();
+
+        write_synced(max_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel max freq: {message}"))
+    }
 }
 
 // Intel GPU controller implementation using Xe driver
@@ -651,6 +729,25 @@ impl GpuClockController for IntelXeController {
             .map_err(|e| anyhow!("Error parsing current freq: {e}"))?;
 
         Ok(cur_val)
+    }
+
+    // New methods to set min and max clocks separately for Xe
+    async fn set_min_clocks(&self, clocks: u32) -> Result<()> {
+        let min_path = self.path.join("device/tile0/gt0/freq0/min_freq");
+        let clocks_str = clocks.to_string();
+
+        write_synced(min_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel Xe min freq: {message}"))
+    }
+
+    async fn set_max_clocks(&self, clocks: u32) -> Result<()> {
+        let max_path = self.path.join("device/tile0/gt0/freq0/max_freq");
+        let clocks_str = clocks.to_string();
+
+        write_synced(max_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel Xe max freq: {message}"))
     }
 }
 
