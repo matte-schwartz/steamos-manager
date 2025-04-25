@@ -280,9 +280,36 @@ pub(crate) async fn set_gpu_power_profile(value: GPUPowerProfile) -> Result<()> 
     write_gpu_sysfs_contents(GPU_POWER_PROFILE_SUFFIX, profile.as_bytes()).await
 }
 
-pub(crate) async fn get_available_gpu_performance_levels() -> Result<Vec<GPUPerformanceLevel>> {
-    let base = find_hwmon(GPU_HWMON_NAME).await?;
-    if try_exists(base.join(GPU_PERFORMANCE_LEVEL_SUFFIX)).await? {
+// GPU performance level controller interface
+#[async_trait]
+trait GpuPerformanceLevelController: Send + Sync {
+    async fn get_performance_level(&self) -> Result<GPUPerformanceLevel>;
+    async fn set_performance_level(&self, level: GPUPerformanceLevel) -> Result<()>;
+    async fn get_available_performance_levels(&self) -> Result<Vec<GPUPerformanceLevel>>;
+}
+
+// AMD GPU performance level controller implementation
+struct AmdGpuPerformanceController {
+    hwmon_path: PathBuf,
+}
+
+#[async_trait]
+impl GpuPerformanceLevelController for AmdGpuPerformanceController {
+    async fn get_performance_level(&self) -> Result<GPUPerformanceLevel> {
+        let level = fs::read_to_string(self.hwmon_path.join(GPU_PERFORMANCE_LEVEL_SUFFIX))
+            .await
+            .map_err(|message| anyhow!("Error reading performance level: {message}"))?;
+        Ok(GPUPerformanceLevel::from_str(level.trim())?)
+    }
+
+    async fn set_performance_level(&self, level: GPUPerformanceLevel) -> Result<()> {
+        let level_str = level.to_string();
+        write_synced(self.hwmon_path.join(GPU_PERFORMANCE_LEVEL_SUFFIX), level_str.as_bytes())
+            .await
+            .map_err(|message| anyhow!("Error setting performance level: {message}"))
+    }
+
+    async fn get_available_performance_levels(&self) -> Result<Vec<GPUPerformanceLevel>> {
         Ok(vec![
             GPUPerformanceLevel::Auto,
             GPUPerformanceLevel::Low,
@@ -290,19 +317,89 @@ pub(crate) async fn get_available_gpu_performance_levels() -> Result<Vec<GPUPerf
             GPUPerformanceLevel::Manual,
             GPUPerformanceLevel::ProfilePeak,
         ])
-    } else {
-        Ok(Vec::new())
     }
 }
 
+// Intel GPU performance level controller implementation
+struct IntelGpuPerformanceController {
+    clock_controller: Box<dyn GpuClockController>,
+}
+
+#[async_trait]
+impl GpuPerformanceLevelController for IntelGpuPerformanceController {
+    async fn get_performance_level(&self) -> Result<GPUPerformanceLevel> {
+        // Determine mode by checking current clock frequency
+        let current = self.clock_controller.get_clocks().await?;
+        let range = self.clock_controller.get_clocks_range().await?;
+
+        // If frequency is at extreme values, consider it Manual mode
+        if current == *range.start() || current == *range.end() {
+            Ok(GPUPerformanceLevel::Manual)
+        } else {
+            Ok(GPUPerformanceLevel::Auto)
+        }
+    }
+
+    async fn set_performance_level(&self, level: GPUPerformanceLevel) -> Result<()> {
+        match level {
+            GPUPerformanceLevel::Auto => {
+                // Auto mode: set to mid-range frequency
+                let range = self.clock_controller.get_clocks_range().await?;
+                let min = *range.start();
+                let max = *range.end();
+                let mid = min + (max - min) / 2;
+                self.clock_controller.set_clocks(mid).await
+            },
+            GPUPerformanceLevel::Manual => {
+                // Manual mode: do nothing, user will set specific frequency later
+                Ok(())
+            },
+            _ => {
+                // Other modes not supported
+                bail!("Intel GPU only supports Auto and Manual performance levels")
+            }
+        }
+    }
+
+    async fn get_available_performance_levels(&self) -> Result<Vec<GPUPerformanceLevel>> {
+        // Intel GPU only supports two modes
+        Ok(vec![
+            GPUPerformanceLevel::Auto,
+            GPUPerformanceLevel::Manual,
+        ])
+    }
+}
+
+// Factory function to get appropriate GPU performance controller
+async fn get_gpu_performance_controller() -> Result<Box<dyn GpuPerformanceLevelController>> {
+    // First try AMD GPU
+    if let Ok(path) = find_hwmon(GPU_HWMON_NAME).await {
+        if try_exists(path.join(GPU_PERFORMANCE_LEVEL_SUFFIX)).await.unwrap_or(false) {
+            return Ok(Box::new(AmdGpuPerformanceController { hwmon_path: path }));
+        }
+    }
+
+    // Then try Intel GPU
+    let controller = get_gpu_controller().await?;
+    Ok(Box::new(IntelGpuPerformanceController {
+        clock_controller: controller,
+    }))
+}
+
+// Update public API functions to use the controller
+pub(crate) async fn get_available_gpu_performance_levels() -> Result<Vec<GPUPerformanceLevel>> {
+    let controller = get_gpu_performance_controller().await?;
+    controller.get_available_performance_levels().await
+}
+
 pub(crate) async fn get_gpu_performance_level() -> Result<GPUPerformanceLevel> {
-    let level = read_gpu_sysfs_contents(GPU_PERFORMANCE_LEVEL_SUFFIX).await?;
-    Ok(GPUPerformanceLevel::from_str(level.trim())?)
+    let controller = get_gpu_performance_controller().await?;
+    controller.get_performance_level().await
 }
 
 pub(crate) async fn set_gpu_performance_level(level: GPUPerformanceLevel) -> Result<()> {
-    let level: String = level.to_string();
-    write_gpu_sysfs_contents(GPU_PERFORMANCE_LEVEL_SUFFIX, level.as_bytes()).await
+    let controller = get_gpu_performance_controller().await?;
+    controller.set_performance_level(level).await
 }
 
 pub(crate) async fn get_available_cpu_scaling_governors() -> Result<Vec<CPUScalingGovernor>> {
@@ -484,7 +581,7 @@ impl GpuClockController for IntelI915Controller {
     }
 
     async fn get_clocks(&self) -> Result<u32> {
-        let cur_path = self.path.join("gt_act_freq_mhz");
+        let cur_path = self.path.join("gt_max_freq_mhz");
 
         let cur_val = fs::read_to_string(cur_path)
             .await
@@ -544,7 +641,7 @@ impl GpuClockController for IntelXeController {
     }
 
     async fn get_clocks(&self) -> Result<u32> {
-        let cur_path = self.path.join("device/tile0/gt0/freq0/cur_freq");
+        let cur_path = self.path.join("device/tile0/gt0/freq0/max_freq");
 
         let cur_val = fs::read_to_string(cur_path)
             .await
