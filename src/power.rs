@@ -339,7 +339,288 @@ pub(crate) async fn set_cpu_scaling_governor(governor: CPUScalingGovernor) -> Re
     write_cpu_governor_sysfs_contents(name).await
 }
 
+#[async_trait]
+trait GpuClockController: Send + Sync {
+    async fn get_clocks_range(&self) -> Result<RangeInclusive<u32>>;
+    async fn set_clocks(&self, clocks: u32) -> Result<()>;
+    async fn get_clocks(&self) -> Result<u32>;
+}
+
+// AMD GPU controller implementation using HWMON
+struct AmdGpuController {
+    hwmon_path: PathBuf,
+}
+
+#[async_trait]
+impl GpuClockController for AmdGpuController {
+    async fn get_clocks_range(&self) -> Result<RangeInclusive<u32>> {
+        let contents = fs::read_to_string(self.hwmon_path.join(GPU_CLOCK_LEVELS_SUFFIX))
+            .await
+            .map_err(|message| anyhow!("Error opening sysfs file for reading {message}"))?;
+
+        let lines = contents.lines();
+        let mut min = 1_000_000;
+        let mut max = 0;
+
+        for line in lines {
+            let Some(caps) = GPU_CLOCK_LEVELS_REGEX.captures(line) else {
+                continue;
+            };
+            let value: u32 = caps["value"].parse().map_err(|message| {
+                anyhow!("Unable to parse value for GPU power profile: {message}")
+            })?;
+            if value < min {
+                min = value;
+            }
+            if value > max {
+                max = value;
+            }
+        }
+
+        ensure!(min <= max, "Could not read any clocks");
+        Ok(min..=max)
+    }
+
+    async fn set_clocks(&self, clocks: u32) -> Result<()> {
+        let mut myfile = File::create(self.hwmon_path.join(GPU_CLOCKS_SUFFIX))
+            .await
+            .inspect_err(|message| error!("Error opening sysfs file for writing: {message}"))?;
+
+        let data = format!("s 0 {clocks}\n");
+        myfile
+            .write(data.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        myfile.flush().await?;
+
+        let data = format!("s 1 {clocks}\n");
+        myfile
+            .write(data.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        myfile.flush().await?;
+
+        myfile
+            .write("c\n".as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        myfile.flush().await?;
+
+        Ok(())
+    }
+
+    async fn get_clocks(&self) -> Result<u32> {
+        let clocks_file = File::open(self.hwmon_path.join(GPU_CLOCKS_SUFFIX)).await?;
+        let mut reader = BufReader::new(clocks_file);
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).await? == 0 {
+                break;
+            }
+            if line != "OD_SCLK:\n" {
+                continue;
+            }
+
+            let mut line = String::new();
+            if reader.read_line(&mut line).await? == 0 {
+                break;
+            }
+            let mhz = match line.split_whitespace().nth(1) {
+                Some(mhz) if mhz.ends_with("Mhz") => mhz.trim_end_matches("Mhz"),
+                _ => break,
+            };
+
+            return Ok(mhz.parse()?);
+        }
+        Ok(0)
+    }
+}
+
+// Intel GPU controller implementation using i915 driver
+struct IntelI915Controller {
+    path: PathBuf,
+}
+
+#[async_trait]
+impl GpuClockController for IntelI915Controller {
+    async fn get_clocks_range(&self) -> Result<RangeInclusive<u32>> {
+        // For i915, the supported frequency range is in the rps_* files
+        let min_path = self.path.join("gt_RPn_freq_mhz");
+        let max_path = self.path.join("gt_RP0_freq_mhz");
+
+        let min_val = fs::read_to_string(min_path)
+            .await
+            .map_err(|message| anyhow!("Error reading Intel min freq: {message}"))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| anyhow!("Error parsing min freq: {e}"))?;
+
+        let max_val = fs::read_to_string(max_path)
+            .await
+            .map_err(|message| anyhow!("Error reading Intel max freq: {message}"))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| anyhow!("Error parsing max freq: {e}"))?;
+
+        Ok(min_val..=max_val)
+    }
+
+    async fn set_clocks(&self, clocks: u32) -> Result<()> {
+        // For Intel, we set both min and max to the same value to force the frequency
+        let min_path = self.path.join("gt_min_freq_mhz");
+        let max_path = self.path.join("gt_max_freq_mhz");
+
+        let clocks_str = clocks.to_string();
+
+        write_synced(min_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel min freq: {message}"))?;
+
+        write_synced(max_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel max freq: {message}"))?;
+
+        Ok(())
+    }
+
+    async fn get_clocks(&self) -> Result<u32> {
+        let cur_path = self.path.join("gt_act_freq_mhz");
+
+        let cur_val = fs::read_to_string(cur_path)
+            .await
+            .map_err(|message| anyhow!("Error reading Intel current freq: {message}"))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| anyhow!("Error parsing current freq: {e}"))?;
+
+        Ok(cur_val)
+    }
+}
+
+// Intel GPU controller implementation using Xe driver
+struct IntelXeController {
+    path: PathBuf,
+}
+
+#[async_trait]
+impl GpuClockController for IntelXeController {
+    async fn get_clocks_range(&self) -> Result<RangeInclusive<u32>> {
+        // For Xe, directly use hardware limits
+        let min_path = self.path.join("device/tile0/gt0/freq0/rpn_freq");
+        let max_path = self.path.join("device/tile0/gt0/freq0/rp0_freq");
+
+        let min_val = fs::read_to_string(min_path)
+            .await
+            .map_err(|message| anyhow!("Error reading Intel Xe min freq: {message}"))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| anyhow!("Error parsing min freq: {e}"))?;
+
+        let max_val = fs::read_to_string(max_path)
+            .await
+            .map_err(|message| anyhow!("Error reading Intel Xe max freq: {message}"))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| anyhow!("Error parsing max freq: {e}"))?;
+
+        Ok(min_val..=max_val)
+    }
+
+    async fn set_clocks(&self, clocks: u32) -> Result<()> {
+        let min_path = self.path.join("device/tile0/gt0/freq0/min_freq");
+        let max_path = self.path.join("device/tile0/gt0/freq0/max_freq");
+
+        let clocks_str = clocks.to_string();
+
+        write_synced(min_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel Xe min freq: {message}"))?;
+
+        write_synced(max_path, clocks_str.as_bytes())
+            .await
+            .inspect_err(|message| error!("Error writing to Intel Xe max freq: {message}"))?;
+
+        Ok(())
+    }
+
+    async fn get_clocks(&self) -> Result<u32> {
+        let cur_path = self.path.join("device/tile0/gt0/freq0/cur_freq");
+
+        let cur_val = fs::read_to_string(cur_path)
+            .await
+            .map_err(|message| anyhow!("Error reading Intel Xe current freq: {message}"))?
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| anyhow!("Error parsing current freq: {e}"))?;
+
+        Ok(cur_val)
+    }
+}
+
+// Helper function to check if a path exists
+async fn path_exists(path: impl AsRef<Path>) -> bool {
+    match try_exists(path).await {
+        Ok(exists) => exists,
+        Err(_) => false,
+    }
+}
+
+// Helper function to check if a GPU is enabled
+async fn is_gpu_enabled(card_path: impl AsRef<Path>) -> bool {
+    let enable_path = card_path.as_ref().join("device/enable");
+
+    if !path_exists(&enable_path).await {
+        return true; // Assume enabled if no enable file exists
+    }
+
+    match fs::read_to_string(&enable_path).await {
+        Ok(content) => content.trim() == "1",
+        Err(_) => true, // Assume enabled if can't read the file
+    }
+}
+
+// Factory function to get the appropriate GPU controller
+async fn get_gpu_controller() -> Result<Box<dyn GpuClockController>> {
+    // First try AMD GPU via HWMON
+    if let Ok(path) = find_hwmon(GPU_HWMON_NAME).await {
+        debug!("Found AMD GPU via HWMON");
+        return Ok(Box::new(AmdGpuController { hwmon_path: path }));
+    }
+
+    // If no AMD GPU, try Intel GPUs
+    for card_num in 0..4 {
+        // Check card0 to card3
+        let card_path = PathBuf::from(format!("/sys/class/drm/card{}", card_num));
+
+        // Skip if path doesn't exist
+        if !path_exists(&card_path).await {
+            continue;
+        }
+
+        // Skip if GPU is disabled
+        if !is_gpu_enabled(&card_path).await {
+            debug!("Skipping disabled GPU at {}", card_path.display());
+            continue;
+        }
+
+        // Check for Intel i915
+        if path_exists(card_path.join("gt_min_freq_mhz")).await {
+            debug!("Found Intel i915 GPU at {}", card_path.display());
+            return Ok(Box::new(IntelI915Controller { path: card_path }));
+        }
+
+        // Check for Intel Xe
+        if path_exists(card_path.join("device/tile0/gt0/freq0/min_freq")).await {
+            debug!("Found Intel Xe GPU at {}", card_path.display());
+            return Ok(Box::new(IntelXeController { path: card_path }));
+        }
+    }
+
+    bail!("No supported GPU found")
+}
+
 pub(crate) async fn get_gpu_clocks_range() -> Result<RangeInclusive<u32>> {
+    // First try to get from config
     if let Some(range) = platform_config()
         .await?
         .as_ref()
@@ -347,86 +628,20 @@ pub(crate) async fn get_gpu_clocks_range() -> Result<RangeInclusive<u32>> {
     {
         return Ok(range.min..=range.max);
     }
-    let contents = read_gpu_sysfs_contents(GPU_CLOCK_LEVELS_SUFFIX).await?;
-    let lines = contents.lines();
-    let mut min = 1_000_000;
-    let mut max = 0;
 
-    for line in lines {
-        let Some(caps) = GPU_CLOCK_LEVELS_REGEX.captures(line) else {
-            continue;
-        };
-        let value: u32 = caps["value"]
-            .parse()
-            .map_err(|message| anyhow!("Unable to parse value for GPU power profile: {message}"))?;
-        if value < min {
-            min = value;
-        }
-        if value > max {
-            max = value;
-        }
-    }
-
-    ensure!(min <= max, "Could not read any clocks");
-    Ok(min..=max)
+    // If no config, use the appropriate controller
+    let controller = get_gpu_controller().await?;
+    controller.get_clocks_range().await
 }
 
 pub(crate) async fn set_gpu_clocks(clocks: u32) -> Result<()> {
-    // Set GPU clocks to given value valid
-    // Only used when GPU Performance Level is manual, but write whenever called.
-    let base = find_hwmon(GPU_HWMON_NAME).await?;
-    let mut myfile = File::create(base.join(GPU_CLOCKS_SUFFIX))
-        .await
-        .inspect_err(|message| error!("Error opening sysfs file for writing: {message}"))?;
-
-    let data = format!("s 0 {clocks}\n");
-    myfile
-        .write(data.as_bytes())
-        .await
-        .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
-    myfile.flush().await?;
-
-    let data = format!("s 1 {clocks}\n");
-    myfile
-        .write(data.as_bytes())
-        .await
-        .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
-    myfile.flush().await?;
-
-    myfile
-        .write("c\n".as_bytes())
-        .await
-        .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
-    myfile.flush().await?;
-
-    Ok(())
+    let controller = get_gpu_controller().await?;
+    controller.set_clocks(clocks).await
 }
 
 pub(crate) async fn get_gpu_clocks() -> Result<u32> {
-    let base = find_hwmon(GPU_HWMON_NAME).await?;
-    let clocks_file = File::open(base.join(GPU_CLOCKS_SUFFIX)).await?;
-    let mut reader = BufReader::new(clocks_file);
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).await? == 0 {
-            break;
-        }
-        if line != "OD_SCLK:\n" {
-            continue;
-        }
-
-        let mut line = String::new();
-        if reader.read_line(&mut line).await? == 0 {
-            break;
-        }
-        let mhz = match line.split_whitespace().nth(1) {
-            Some(mhz) if mhz.ends_with("Mhz") => mhz.trim_end_matches("Mhz"),
-            _ => break,
-        };
-
-        return Ok(mhz.parse()?);
-    }
-    Ok(0)
+    let controller = get_gpu_controller().await?;
+    controller.get_clocks().await
 }
 
 async fn find_sysdir(prefix: impl AsRef<Path>, expected: &str) -> Result<PathBuf> {
