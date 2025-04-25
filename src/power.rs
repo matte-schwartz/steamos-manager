@@ -686,7 +686,7 @@ impl GpuClockController for IntelI915Controller {
     }
 
     async fn get_clocks(&self) -> Result<u32> {
-        let cur_path = self.path.join("gt_max_freq_mhz");
+        let cur_path = self.path.join("gt_min_freq_mhz");
 
         let cur_val = fs::read_to_string(cur_path)
             .await
@@ -786,7 +786,7 @@ impl GpuClockController for IntelXeController {
     }
 
     async fn get_clocks(&self) -> Result<u32> {
-        let cur_path = self.path.join("device/tile0/gt0/freq0/max_freq");
+        let cur_path = self.path.join("device/tile0/gt0/freq0/min_freq");
 
         let cur_val = fs::read_to_string(cur_path)
             .await
