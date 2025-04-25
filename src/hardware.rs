@@ -37,6 +37,7 @@ pub(crate) enum DeviceType {
     Unknown,
     SteamDeck,
     LegionGoS,
+    ZotacZone,
 }
 
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone, TryFromPrimitive)]
@@ -81,6 +82,7 @@ pub(crate) async fn device_variant() -> Result<(DeviceType, String)> {
         ("LENOVO", "83L3" | "83N6" | "83Q2" | "83Q3", _) => {
             (DeviceType::LegionGoS, product_name.to_string())
         }
+        ("ZOTAC", _, "G0A1W" | "G1A1W") => (DeviceType::ZotacZone, board_name.to_string()),
         ("Valve", _, "Jupiter" | "Galileo") => (DeviceType::SteamDeck, board_name.to_string()),
         _ => (DeviceType::Unknown, String::from("unknown")),
     })
@@ -274,6 +276,21 @@ pub mod test {
         assert_eq!(
             device_variant().await.unwrap(),
             (DeviceType::SteamDeck, String::from("Jupiter"))
+        );
+
+        write(crate::path(SYS_VENDOR_PATH), "ZOTAC\n")
+            .await
+            .expect("write");
+        write(crate::path(BOARD_NAME_PATH), "G0A1W\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::ZotacZone, String::from("G0A1W"))
         );
 
         write(crate::path(BOARD_NAME_PATH), "Galileo\n")
