@@ -94,6 +94,7 @@ pub enum CPUScalingGovernor {
 pub enum TdpLimitingMethod {
     GpuHwmon,
     LenovoWmi,
+    ZotacZonePlatform,
 }
 
 #[derive(Debug)]
@@ -101,6 +102,9 @@ pub(crate) struct GpuHwmonTdpLimitManager {}
 
 #[derive(Debug)]
 pub(crate) struct LenovoWmiTdpLimitManager {}
+
+#[derive(Debug)]
+pub(crate) struct ZotacZoneTdpLimitManager {}
 
 #[async_trait]
 pub(crate) trait TdpLimitManager: Send + Sync {
@@ -114,14 +118,15 @@ pub(crate) trait TdpLimitManager: Send + Sync {
 
 pub(crate) async fn tdp_limit_manager() -> Result<Box<dyn TdpLimitManager>> {
     let config = platform_config().await?;
-    let config = config
+    let tdp_config = config
         .as_ref()
         .and_then(|config| config.tdp_limit.as_ref())
         .ok_or(anyhow!("No TDP limit configured"))?;
 
-    Ok(match config.method {
+    Ok(match tdp_config.method {
         TdpLimitingMethod::LenovoWmi => Box::new(LenovoWmiTdpLimitManager {}),
         TdpLimitingMethod::GpuHwmon => Box::new(GpuHwmonTdpLimitManager {}),
+        TdpLimitingMethod::ZotacZonePlatform => Box::new(ZotacZoneTdpLimitManager {}),
     })
 }
 
@@ -548,6 +553,95 @@ impl TdpLimitManager for LenovoWmiTdpLimitManager {
     }
 }
 
+impl ZotacZoneTdpLimitManager {
+    const PREFIX: &str = "/sys/class/firmware-attributes/zotac_zone_platform/attributes";
+    const SPL_SUFFIX: &str = "ppt_pl1_spl";
+    const SPPT_SUFFIX: &str = "ppt_pl2_sppt";
+    const FPPT_SUFFIX: &str = "ppt_pl3_fppt";
+}
+
+#[async_trait]
+impl TdpLimitManager for ZotacZoneTdpLimitManager {
+    async fn get_tdp_limit(&self) -> Result<u32> {
+        let config = platform_config().await?;
+        if let Some(config) = config
+            .as_ref()
+            .and_then(|config| config.performance_profile.as_ref())
+        {
+            ensure!(
+                get_platform_profile(&config.platform_profile_name).await? == "custom",
+                "TDP limiting not active"
+            );
+        }
+        let base = path(Self::PREFIX);
+
+        fs::read_to_string(base.join(Self::SPL_SUFFIX).join("current_value"))
+            .await
+            .map_err(|message| anyhow!("Error reading sysfs: {message}"))?
+            .trim()
+            .parse()
+            .map_err(|e| anyhow!("Error parsing value: {e}"))
+    }
+
+    async fn set_tdp_limit(&self, limit: u32) -> Result<()> {
+        ensure!(
+            self.get_tdp_limit_range().await?.contains(&limit),
+            "Invalid limit"
+        );
+
+        let limit = limit.to_string();
+        let base = path(Self::PREFIX);
+        write_synced(
+            base.join(Self::SPL_SUFFIX).join("current_value"),
+            limit.as_bytes(),
+        )
+        .await
+        .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        write_synced(
+            base.join(Self::SPPT_SUFFIX).join("current_value"),
+            limit.as_bytes(),
+        )
+        .await
+        .inspect_err(|message| error!("Error writing to sysfs file: {message}"))?;
+        write_synced(
+            base.join(Self::FPPT_SUFFIX).join("current_value"),
+            limit.as_bytes(),
+        )
+        .await
+        .inspect_err(|message| error!("Error writing to sysfs file: {message}"))
+    }
+
+    async fn get_tdp_limit_range(&self) -> Result<RangeInclusive<u32>> {
+        let base = path(Self::PREFIX).join(Self::SPL_SUFFIX);
+
+        let min: u32 = fs::read_to_string(base.join("min_value"))
+            .await
+            .map_err(|message| anyhow!("Error reading sysfs: {message}"))?
+            .trim()
+            .parse()
+            .map_err(|e| anyhow!("Error parsing value: {e}"))?;
+        let max: u32 = fs::read_to_string(base.join("max_value"))
+            .await
+            .map_err(|message| anyhow!("Error reading sysfs: {message}"))?
+            .trim()
+            .parse()
+            .map_err(|e| anyhow!("Error parsing value: {e}"))?;
+        Ok(min..=max)
+    }
+
+    async fn is_active(&self) -> Result<bool> {
+        let config = platform_config().await?;
+        if let Some(config) = config
+            .as_ref()
+            .and_then(|config| config.performance_profile.as_ref())
+        {
+            Ok(get_platform_profile(&config.platform_profile_name).await? == "custom")
+        } else {
+            Ok(true)
+        }
+    }
+}
+
 pub(crate) async fn get_max_charge_level() -> Result<i32> {
     let config = platform_config().await?;
     let config = config
@@ -655,7 +749,7 @@ pub(crate) mod test {
 
         write(base.join("max_battery_charge_level"), "10\n").await?;
 
-        let base = path(PLATFORM_PROFILE_PREFIX).join("platform-profile0");
+        let base = path(PLATFORM_PROFILE_PREFIX).join("platform-profile-0");
         create_dir_all(&base).await?;
         write_synced(base.join("name"), b"power-driver\n").await?;
         write_synced(base.join("choices"), b"a b c\n").await?;
@@ -1337,7 +1431,7 @@ CCLK_RANGE in Core0:
             .await
             .is_err());
 
-        let base = path(PLATFORM_PROFILE_PREFIX).join("platform-profile0");
+        let base = path(PLATFORM_PROFILE_PREFIX).join("platform-profile-0");
         create_dir_all(&base).await.unwrap();
         assert!(get_available_platform_profiles("power-driver")
             .await

@@ -1,0 +1,6 @@
+[performance_profile]
+platform_profile_name = "zotac_zone_platform"
+suggested_default = "custom"
+
+[tdp_limit]
+method = "zotac_zone_platform"
