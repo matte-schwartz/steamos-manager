@@ -1,0 +1,6 @@
+[performance_profile]
+platform_profile_name = "msi-wmi-platform"
+suggested_default = "balanced-performance"
+
+[tdp_limit]
+method = "msi_wmi"
