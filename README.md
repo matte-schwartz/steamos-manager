@@ -77,6 +77,12 @@ an interface will be used if available. As a rule of thumb, the client will
 always provide full support for the SteamOS Manager interface version available
 in the Stable release of SteamOS.
 
+Another pitfall is that while most of the properties do signal when they are
+changed by SteamOS Manager itself, several of these properties can also change
+out from under SteamOS Manager if something on the system bypasses it. While
+this should never be the case if the user doesn't prod at the underlying system
+manually, it's something that interface users should be aware of.
+
 ## Implementation details
 
 SteamOS Manager is compromised of two daemons: one runs as the logged in user

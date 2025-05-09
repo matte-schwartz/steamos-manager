@@ -29,6 +29,7 @@ use zbus::Connection;
 
 use crate::hardware::{device_type, DeviceType};
 use crate::manager::root::RootManagerProxy;
+use crate::manager::user::{TdpLimit1, MANAGER_PATH};
 use crate::platform::platform_config;
 use crate::Service;
 use crate::{path, write_synced};
@@ -138,6 +139,7 @@ pub(crate) async fn tdp_limit_manager() -> Result<Box<dyn TdpLimitManager>> {
 
 pub(crate) struct TdpManagerService {
     proxy: RootManagerProxy<'static>,
+    session: Connection,
     channel: UnboundedReceiver<TdpManagerCommand>,
     download_set: JoinSet<String>,
     download_handles: HashMap<String, u32>,
@@ -640,7 +642,8 @@ pub(crate) async fn set_platform_profile(name: &str, profile: &str) -> Result<()
 impl TdpManagerService {
     pub async fn new(
         channel: UnboundedReceiver<TdpManagerCommand>,
-        connection: &Connection,
+        system: &Connection,
+        session: &Connection,
     ) -> Result<TdpManagerService> {
         let config = platform_config().await?;
         let config = config
@@ -649,10 +652,11 @@ impl TdpManagerService {
             .ok_or(anyhow!("No TDP limit configured"))?;
 
         let manager = tdp_limit_manager().await?;
-        let proxy = RootManagerProxy::new(connection).await?;
+        let proxy = RootManagerProxy::new(system).await?;
 
         Ok(TdpManagerService {
             proxy,
+            session: session.clone(),
             channel,
             download_set: JoinSet::new(),
             download_handles: HashMap::new(),
@@ -737,11 +741,23 @@ impl TdpManagerService {
     }
 
     async fn set_tdp_limit(&self, limit: u32) -> Result<()> {
-        Ok(self
-            .proxy
+        self.proxy
             .set_tdp_limit(limit)
             .await
-            .inspect_err(|e| error!("Failed to set TDP limit: {e}"))?)
+            .inspect_err(|e| error!("Failed to set TDP limit: {e}"))?;
+
+        if let Ok(interface) = self
+            .session
+            .object_server()
+            .interface::<_, TdpLimit1>(MANAGER_PATH)
+            .await
+        {
+            tokio::spawn(async move {
+                let ctx = interface.signal_emitter();
+                interface.get().await.tdp_limit_changed(&ctx).await
+            });
+        }
+        Ok(())
     }
 
     async fn handle_command(&mut self, command: TdpManagerCommand) -> Result<()> {
@@ -1639,7 +1655,7 @@ CCLK_RANGE in Core0:
             .await
             .expect("at");
 
-        let mut service = TdpManagerService::new(rx, &connection)
+        let mut service = TdpManagerService::new(rx, &connection, &connection)
             .await
             .expect("service");
         let task = tokio::spawn(async move {
@@ -1734,7 +1750,7 @@ CCLK_RANGE in Core0:
             .await
             .expect("at");
 
-        let mut service = TdpManagerService::new(rx, &connection)
+        let mut service = TdpManagerService::new(rx, &connection, &connection)
             .await
             .expect("service");
         let task = tokio::spawn(async move {

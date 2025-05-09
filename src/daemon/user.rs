@@ -116,7 +116,7 @@ async fn create_connections(
     let jm_service = JobManagerService::new(job_manager, rx, system.clone());
 
     let (tdp_tx, rx) = unbounded_channel();
-    let tdp_service = TdpManagerService::new(rx, &system).await?;
+    let tdp_service = TdpManagerService::new(rx, &system, &connection).await?;
 
     create_interfaces(connection.clone(), system.clone(), channel, jm_tx, tdp_tx).await?;
 

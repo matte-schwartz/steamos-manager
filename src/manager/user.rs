@@ -36,7 +36,7 @@ use crate::wifi::{
 };
 use crate::API_VERSION;
 
-const MANAGER_PATH: &str = "/com/steampowered/SteamOSManager1";
+pub(crate) const MANAGER_PATH: &str = "/com/steampowered/SteamOSManager1";
 
 macro_rules! method {
     ($self:expr, $method:expr, $($args:expr),+) => {
@@ -131,7 +131,7 @@ struct GpuPowerProfile1 {
     proxy: Proxy<'static>,
 }
 
-struct TdpLimit1 {
+pub(crate) struct TdpLimit1 {
     manager: UnboundedSender<TdpManagerCommand>,
 }
 
@@ -226,7 +226,7 @@ impl SteamOSManager {
         Ok(())
     }
 
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn wifi_backend(&self) -> fdo::Result<u32> {
         match get_wifi_backend().await {
             Ok(backend) => Ok(backend as u32),
@@ -235,8 +235,13 @@ impl SteamOSManager {
     }
 
     #[zbus(property)]
-    async fn set_wifi_backend(&self, backend: u32) -> zbus::Result<()> {
-        self.proxy.call("SetWifiBackend", &(backend)).await
+    async fn set_wifi_backend(
+        &self,
+        backend: u32,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = self.proxy.call("SetWifiBackend", &(backend)).await?;
+        self.wifi_backend_changed(&ctx).await
     }
 }
 
@@ -254,7 +259,7 @@ impl BatteryChargeLimit1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.BatteryChargeLimit1")]
 impl BatteryChargeLimit1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn max_charge_level(&self) -> fdo::Result<i32> {
         let level = get_max_charge_level().await.map_err(to_zbus_fdo_error)?;
         if level <= 0 {
@@ -265,8 +270,13 @@ impl BatteryChargeLimit1 {
     }
 
     #[zbus(property)]
-    async fn set_max_charge_level(&self, limit: i32) -> zbus::Result<()> {
-        self.proxy.call("SetMaxChargeLevel", &(limit)).await
+    async fn set_max_charge_level(
+        &self,
+        limit: i32,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = self.proxy.call("SetMaxChargeLevel", &(limit)).await?;
+        self.max_charge_level_changed(&ctx).await
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
@@ -285,7 +295,7 @@ impl BatteryChargeLimit1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.CpuScaling1")]
 impl CpuScaling1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property(emits_changed_signal = "const"))]
     async fn available_cpu_scaling_governors(&self) -> fdo::Result<Vec<String>> {
         let governors = get_available_cpu_scaling_governors()
             .await
@@ -297,7 +307,7 @@ impl CpuScaling1 {
         Ok(result)
     }
 
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn cpu_scaling_governor(&self) -> fdo::Result<String> {
         let governor = get_cpu_scaling_governor()
             .await
@@ -306,8 +316,16 @@ impl CpuScaling1 {
     }
 
     #[zbus(property)]
-    async fn set_cpu_scaling_governor(&self, governor: String) -> zbus::Result<()> {
-        self.proxy.call("SetCpuScalingGovernor", &(governor)).await
+    async fn set_cpu_scaling_governor(
+        &self,
+        governor: String,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = self
+            .proxy
+            .call("SetCpuScalingGovernor", &(governor))
+            .await?;
+        self.cpu_scaling_governor_changed(&ctx).await
     }
 }
 
@@ -320,20 +338,25 @@ impl FactoryReset1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.FanControl1")]
 impl FanControl1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn fan_control_state(&self) -> fdo::Result<u32> {
         getter!(self, "FanControlState")
     }
 
     #[zbus(property)]
-    async fn set_fan_control_state(&self, state: u32) -> zbus::Result<()> {
-        setter!(self, "FanControlState", state)
+    async fn set_fan_control_state(
+        &self,
+        state: u32,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = setter!(self, "FanControlState", state)?;
+        self.fan_control_state_changed(&ctx).await
     }
 }
 
 #[interface(name = "com.steampowered.SteamOSManager1.GpuPerformanceLevel1")]
 impl GpuPerformanceLevel1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property(emits_changed_signal = "const"))]
     async fn available_gpu_performance_levels(&self) -> fdo::Result<Vec<String>> {
         get_available_gpu_performance_levels()
             .await
@@ -342,7 +365,7 @@ impl GpuPerformanceLevel1 {
             .map_err(to_zbus_fdo_error)
     }
 
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn gpu_performance_level(&self) -> fdo::Result<String> {
         match get_gpu_performance_level().await {
             Ok(level) => Ok(level.to_string()),
@@ -354,11 +377,16 @@ impl GpuPerformanceLevel1 {
     }
 
     #[zbus(property)]
-    async fn set_gpu_performance_level(&self, level: &str) -> zbus::Result<()> {
-        self.proxy.call("SetGpuPerformanceLevel", &(level)).await
+    async fn set_gpu_performance_level(
+        &self,
+        level: &str,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = self.proxy.call("SetGpuPerformanceLevel", &(level)).await?;
+        self.gpu_performance_level_changed(&ctx).await
     }
 
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn manual_gpu_clock(&self) -> fdo::Result<u32> {
         get_gpu_clocks()
             .await
@@ -367,8 +395,13 @@ impl GpuPerformanceLevel1 {
     }
 
     #[zbus(property)]
-    async fn set_manual_gpu_clock(&self, clocks: u32) -> zbus::Result<()> {
-        self.proxy.call("SetManualGpuClock", &(clocks)).await
+    async fn set_manual_gpu_clock(
+        &self,
+        clocks: u32,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = self.proxy.call("SetManualGpuClock", &(clocks)).await?;
+        self.manual_gpu_clock_changed(&ctx).await
     }
 
     #[zbus(property(emits_changed_signal = "const"))]
@@ -390,7 +423,7 @@ impl GpuPerformanceLevel1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.GpuPowerProfile1")]
 impl GpuPowerProfile1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property(emits_changed_signal = "const"))]
     async fn available_gpu_power_profiles(&self) -> fdo::Result<Vec<String>> {
         let (_, names): (Vec<u32>, Vec<String>) = get_available_gpu_power_profiles()
             .await
@@ -400,7 +433,7 @@ impl GpuPowerProfile1 {
         Ok(names)
     }
 
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn gpu_power_profile(&self) -> fdo::Result<String> {
         match get_gpu_power_profile().await {
             Ok(profile) => Ok(profile.to_string()),
@@ -412,8 +445,13 @@ impl GpuPowerProfile1 {
     }
 
     #[zbus(property)]
-    async fn set_gpu_power_profile(&self, profile: &str) -> zbus::Result<()> {
-        self.proxy.call("SetGpuPowerProfile", &(profile)).await
+    async fn set_gpu_power_profile(
+        &self,
+        profile: &str,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = self.proxy.call("SetGpuPowerProfile", &(profile)).await?;
+        self.gpu_power_profile_changed(&ctx).await
     }
 }
 
@@ -426,7 +464,7 @@ impl HdmiCec1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.HdmiCec1")]
 impl HdmiCec1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn hdmi_cec_state(&self) -> fdo::Result<u32> {
         match self.hdmi_cec.get_enabled_state().await {
             Ok(state) => Ok(state as u32),
@@ -435,16 +473,22 @@ impl HdmiCec1 {
     }
 
     #[zbus(property)]
-    async fn set_hdmi_cec_state(&self, state: u32) -> zbus::Result<()> {
+    async fn set_hdmi_cec_state(
+        &self,
+        state: u32,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
         let state = match HdmiCecState::try_from(state) {
             Ok(state) => state,
             Err(err) => return Err(fdo::Error::InvalidArgs(err.to_string()).into()),
         };
-        self.hdmi_cec
+        let (): _ = self
+            .hdmi_cec
             .set_enabled_state(state)
             .await
             .inspect_err(|message| error!("Error setting CEC state: {message}"))
-            .map_err(to_zbus_error)
+            .map_err(to_zbus_error)?;
+        self.hdmi_cec_state_changed(&ctx).await
     }
 }
 
@@ -501,7 +545,7 @@ impl Manager2 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.PerformanceProfile1")]
 impl PerformanceProfile1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property(emits_changed_signal = "const"))]
     async fn available_performance_profiles(&self) -> fdo::Result<Vec<String>> {
         let config = platform_config().await.map_err(to_zbus_fdo_error)?;
         let config = config
@@ -515,7 +559,7 @@ impl PerformanceProfile1 {
             .map_err(to_zbus_fdo_error)
     }
 
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn performance_profile(&self) -> fdo::Result<String> {
         let config = platform_config().await.map_err(to_zbus_fdo_error)?;
         let config = config
@@ -534,8 +578,10 @@ impl PerformanceProfile1 {
         &self,
         profile: &str,
         #[zbus(connection)] connection: &Connection,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
     ) -> zbus::Result<()> {
         let _: () = self.proxy.call("SetPerformanceProfile", &(profile)).await?;
+        self.performance_profile_changed(&ctx).await?;
         let connection = connection.clone();
         let manager = self.tdp_limit_manager.clone();
         let _ = manager.send(TdpManagerCommand::UpdateDownloadMode);
@@ -589,7 +635,7 @@ impl Storage1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.TdpLimit1")]
 impl TdpLimit1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn tdp_limit(&self) -> u32 {
         let (tx, rx) = oneshot::channel();
         if self
@@ -678,7 +724,7 @@ impl WifiDebug1 {
         Ok(())
     }
 
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn wifi_backend(&self) -> fdo::Result<String> {
         match get_wifi_backend().await {
             Ok(backend) => Ok(backend.to_string()),
@@ -687,12 +733,17 @@ impl WifiDebug1 {
     }
 
     #[zbus(property)]
-    async fn set_wifi_backend(&self, backend: &str) -> zbus::Result<()> {
+    async fn set_wifi_backend(
+        &self,
+        backend: &str,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
         let backend = match WifiBackend::try_from(backend) {
             Ok(backend) => backend,
             Err(e) => return Err(fdo::Error::InvalidArgs(e.to_string()).into()),
         };
-        self.proxy.call("SetWifiBackend", &(backend as u32)).await
+        let _: () = self.proxy.call("SetWifiBackend", &(backend as u32)).await?;
+        self.wifi_backend_changed(&ctx).await
     }
 
     async fn capture_debug_trace_output(&self) -> fdo::Result<String> {
@@ -709,7 +760,7 @@ impl WifiDebugDump1 {
 
 #[interface(name = "com.steampowered.SteamOSManager1.WifiPowerManagement1")]
 impl WifiPowerManagement1 {
-    #[zbus(property(emits_changed_signal = "false"))]
+    #[zbus(property)]
     async fn wifi_power_management_state(&self) -> fdo::Result<u32> {
         match get_wifi_power_management_state().await {
             Ok(state) => Ok(state as u32),
@@ -718,10 +769,16 @@ impl WifiPowerManagement1 {
     }
 
     #[zbus(property)]
-    async fn set_wifi_power_management_state(&self, state: u32) -> zbus::Result<()> {
-        self.proxy
+    async fn set_wifi_power_management_state(
+        &self,
+        state: u32,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        let _: () = self
+            .proxy
             .call("SetWifiPowerManagementState", &(state))
-            .await
+            .await?;
+        self.wifi_power_management_state_changed(&ctx).await
     }
 }
 
