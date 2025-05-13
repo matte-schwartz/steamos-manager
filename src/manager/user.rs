@@ -482,7 +482,7 @@ impl HdmiCec1 {
             Ok(state) => state,
             Err(err) => return Err(fdo::Error::InvalidArgs(err.to_string()).into()),
         };
-        let (): _ = self
+        let _: () = self
             .hdmi_cec
             .set_enabled_state(state)
             .await
@@ -588,7 +588,7 @@ impl PerformanceProfile1 {
         tokio::spawn(async move {
             let (tx, rx) = oneshot::channel();
             manager.send(TdpManagerCommand::IsActive(tx))?;
-            Ok::<(), Error>(if rx.await?? {
+            if rx.await?? {
                 let tdp_limit = TdpLimit1 { manager };
                 connection
                     .object_server()
@@ -599,7 +599,8 @@ impl PerformanceProfile1 {
                     .object_server()
                     .remove::<TdpLimit1, _>(MANAGER_PATH)
                     .await?;
-            })
+            }
+            Ok::<(), Error>(())
         });
         Ok(())
     }

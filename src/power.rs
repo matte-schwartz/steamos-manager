@@ -754,7 +754,7 @@ impl TdpManagerService {
         {
             tokio::spawn(async move {
                 let ctx = interface.signal_emitter();
-                interface.get().await.tdp_limit_changed(&ctx).await
+                interface.get().await.tdp_limit_changed(ctx).await
             });
         }
         Ok(())
