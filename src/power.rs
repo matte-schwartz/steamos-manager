@@ -101,18 +101,21 @@ pub enum CPUScalingGovernor {
     SchedUtil,
 }
 
-#[derive(Display, EnumString, VariantNames, PartialEq, Debug, Copy, Clone)]
+#[derive(Display, EnumString, VariantNames, PartialEq, Debug, Clone)]
 #[strum(serialize_all = "snake_case")]
 pub enum TdpLimitingMethod {
     GpuHwmon,
-    LenovoWmi,
+    FirmwareAttribute,
 }
 
 #[derive(Debug)]
 pub(crate) struct GpuHwmonTdpLimitManager {}
 
 #[derive(Debug)]
-pub(crate) struct LenovoWmiTdpLimitManager {}
+pub(crate) struct FirmwareAttributeLimitManager {
+    attribute: String,
+    performance_profile: Option<String>,
+}
 
 #[async_trait]
 pub(crate) trait TdpLimitManager: Send + Sync {
@@ -131,8 +134,16 @@ pub(crate) async fn tdp_limit_manager() -> Result<Box<dyn TdpLimitManager>> {
         .and_then(|config| config.tdp_limit.as_ref())
         .ok_or(anyhow!("No TDP limit configured"))?;
 
-    Ok(match config.method {
-        TdpLimitingMethod::LenovoWmi => Box::new(LenovoWmiTdpLimitManager {}),
+    Ok(match &config.method {
+        TdpLimitingMethod::FirmwareAttribute => {
+            let Some(ref firmware_attribute) = config.firmware_attribute else {
+                bail!("Firmware attribute TDP limiting method not configured");
+            };
+            Box::new(FirmwareAttributeLimitManager {
+                attribute: firmware_attribute.attribute.clone(),
+                performance_profile: firmware_attribute.performance_profile.clone(),
+            })
+        }
         TdpLimitingMethod::GpuHwmon => Box::new(GpuHwmonTdpLimitManager {}),
     })
 }
@@ -492,27 +503,18 @@ impl TdpLimitManager for GpuHwmonTdpLimitManager {
     }
 }
 
-impl LenovoWmiTdpLimitManager {
-    const PREFIX: &str = "/sys/class/firmware-attributes/lenovo-wmi-other-0/attributes";
+impl FirmwareAttributeLimitManager {
+    const PREFIX: &str = "/sys/class/firmware-attributes";
     const SPL_SUFFIX: &str = "ppt_pl1_spl";
     const SPPT_SUFFIX: &str = "ppt_pl2_sppt";
     const FPPT_SUFFIX: &str = "ppt_pl3_fppt";
 }
 
 #[async_trait]
-impl TdpLimitManager for LenovoWmiTdpLimitManager {
+impl TdpLimitManager for FirmwareAttributeLimitManager {
     async fn get_tdp_limit(&self) -> Result<u32> {
-        let config = platform_config().await?;
-        if let Some(config) = config
-            .as_ref()
-            .and_then(|config| config.performance_profile.as_ref())
-        {
-            ensure!(
-                get_platform_profile(&config.platform_profile_name).await? == "custom",
-                "TDP limiting not active"
-            );
-        }
-        let base = path(Self::PREFIX);
+        ensure!(self.is_active().await?, "TDP limiting not active");
+        let base = path(Self::PREFIX).join(&self.attribute).join("attributes");
 
         fs::read_to_string(base.join(Self::SPL_SUFFIX).join("current_value"))
             .await
@@ -523,13 +525,14 @@ impl TdpLimitManager for LenovoWmiTdpLimitManager {
     }
 
     async fn set_tdp_limit(&self, limit: u32) -> Result<()> {
+        ensure!(self.is_active().await?, "TDP limiting not active");
         ensure!(
             self.get_tdp_limit_range().await?.contains(&limit),
             "Invalid limit"
         );
 
         let limit = limit.to_string();
-        let base = path(Self::PREFIX);
+        let base = path(Self::PREFIX).join(&self.attribute).join("attributes");
         write_synced(
             base.join(Self::SPL_SUFFIX).join("current_value"),
             limit.as_bytes(),
@@ -551,7 +554,10 @@ impl TdpLimitManager for LenovoWmiTdpLimitManager {
     }
 
     async fn get_tdp_limit_range(&self) -> Result<RangeInclusive<u32>> {
-        let base = path(Self::PREFIX).join(Self::SPL_SUFFIX);
+        let base = path(Self::PREFIX)
+            .join(&self.attribute)
+            .join("attributes")
+            .join(Self::SPL_SUFFIX);
 
         let min: u32 = fs::read_to_string(base.join("min_value"))
             .await
@@ -569,12 +575,15 @@ impl TdpLimitManager for LenovoWmiTdpLimitManager {
     }
 
     async fn is_active(&self) -> Result<bool> {
+        let Some(ref performance_profile) = self.performance_profile else {
+            return Ok(true);
+        };
         let config = platform_config().await?;
         if let Some(config) = config
             .as_ref()
             .and_then(|config| config.performance_profile.as_ref())
         {
-            Ok(get_platform_profile(&config.platform_profile_name).await? == "custom")
+            Ok(get_platform_profile(&config.platform_profile_name).await? == *performance_profile)
         } else {
             Ok(true)
         }
@@ -848,7 +857,10 @@ pub(crate) mod test {
     use crate::error::to_zbus_fdo_error;
     use crate::hardware::test::fake_model;
     use crate::hardware::SteamDeckVariant;
-    use crate::platform::{BatteryChargeLimitConfig, PlatformConfig, RangeConfig, TdpLimitConfig};
+    use crate::platform::{
+        BatteryChargeLimitConfig, FirmwareAttributeConfig, PerformanceProfileConfig,
+        PlatformConfig, RangeConfig, TdpLimitConfig,
+    };
     use crate::{enum_roundtrip, testing};
     use anyhow::anyhow;
     use std::time::Duration;
@@ -1034,6 +1046,7 @@ CCLK_RANGE in Core0:
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
+            firmware_attribute: None,
         });
         handle.test.platform_config.replace(Some(platform_config));
         let manager = tdp_limit_manager().await.unwrap();
@@ -1058,6 +1071,7 @@ CCLK_RANGE in Core0:
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
+            firmware_attribute: None,
         });
         handle.test.platform_config.replace(Some(platform_config));
         let manager = tdp_limit_manager().await.unwrap();
@@ -1641,6 +1655,7 @@ CCLK_RANGE in Core0:
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: NonZeroU32::new(6),
+            firmware_attribute: None,
         });
         h.test.platform_config.replace(Some(platform_config));
         let manager = tdp_limit_manager().await.unwrap();
@@ -1736,6 +1751,7 @@ CCLK_RANGE in Core0:
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
+            firmware_attribute: None,
         });
         h.test.platform_config.replace(Some(platform_config));
         let manager = tdp_limit_manager().await.unwrap();
@@ -1785,5 +1801,176 @@ CCLK_RANGE in Core0:
 
         fin_tx.send(()).expect("fin");
         task.await.expect("exit").expect("exit2");
+    }
+
+    #[tokio::test]
+    async fn test_firmware_attribute_tdp_limiter() {
+        let h = testing::start();
+        setup().await.expect("setup");
+
+        let mut platform_config = PlatformConfig::default();
+        platform_config.performance_profile = Some(PerformanceProfileConfig {
+            platform_profile_name: String::from("platform-profile0"),
+            suggested_default: String::from("custom"),
+        });
+        platform_config.tdp_limit = Some(TdpLimitConfig {
+            method: TdpLimitingMethod::FirmwareAttribute,
+            range: Some(RangeConfig { min: 3, max: 15 }),
+            download_mode_limit: None,
+            firmware_attribute: Some(FirmwareAttributeConfig {
+                attribute: String::from("tdp0"),
+                performance_profile: Some(String::from("custom")),
+            }),
+        });
+        h.test.platform_config.replace(Some(platform_config));
+
+        let attributes_base = path(FirmwareAttributeLimitManager::PREFIX)
+            .join("tdp0")
+            .join("attributes");
+        let spl_base = attributes_base.join(FirmwareAttributeLimitManager::SPL_SUFFIX);
+        let sppt_base = attributes_base.join(FirmwareAttributeLimitManager::SPPT_SUFFIX);
+        let fppt_base = attributes_base.join(FirmwareAttributeLimitManager::FPPT_SUFFIX);
+        create_dir_all(&spl_base).await.unwrap();
+        write_synced(spl_base.join("current_value"), b"10\n")
+            .await
+            .unwrap();
+        create_dir_all(&sppt_base).await.unwrap();
+        write_synced(sppt_base.join("current_value"), b"10\n")
+            .await
+            .unwrap();
+        create_dir_all(&fppt_base).await.unwrap();
+        write_synced(fppt_base.join("current_value"), b"10\n")
+            .await
+            .unwrap();
+
+        write_synced(spl_base.join("min_value"), b"6\n")
+            .await
+            .unwrap();
+        write_synced(spl_base.join("max_value"), b"20\n")
+            .await
+            .unwrap();
+
+        let platform_profile_base = path(PLATFORM_PROFILE_PREFIX).join("platform-profile0");
+        create_dir_all(&platform_profile_base).await.unwrap();
+        write_synced(platform_profile_base.join("name"), b"platform-profile0\n")
+            .await
+            .unwrap();
+        write_synced(platform_profile_base.join("profile"), b"custom\n")
+            .await
+            .unwrap();
+
+        let manager = tdp_limit_manager().await.unwrap();
+
+        assert_eq!(manager.is_active().await.unwrap(), true);
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 10);
+
+        manager.set_tdp_limit(15).await.unwrap();
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+        assert_eq!(
+            read_to_string(spl_base.join("current_value"))
+                .await
+                .unwrap(),
+            "15"
+        );
+        assert_eq!(
+            read_to_string(sppt_base.join("current_value"))
+                .await
+                .unwrap(),
+            "15"
+        );
+        assert_eq!(
+            read_to_string(fppt_base.join("current_value"))
+                .await
+                .unwrap(),
+            "15"
+        );
+
+        manager.set_tdp_limit(25).await.unwrap_err();
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+
+        manager.set_tdp_limit(2).await.unwrap_err();
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+
+        write_synced(platform_profile_base.join("profile"), b"balanced\n")
+            .await
+            .unwrap();
+
+        manager.set_tdp_limit(10).await.unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn test_firmware_attribute_tdp_limiter_no_profile() {
+        let h = testing::start();
+        setup().await.expect("setup");
+
+        let mut platform_config = PlatformConfig::default();
+        platform_config.tdp_limit = Some(TdpLimitConfig {
+            method: TdpLimitingMethod::FirmwareAttribute,
+            range: Some(RangeConfig { min: 3, max: 15 }),
+            download_mode_limit: None,
+            firmware_attribute: Some(FirmwareAttributeConfig {
+                attribute: String::from("tdp0"),
+                performance_profile: None,
+            }),
+        });
+        h.test.platform_config.replace(Some(platform_config));
+
+        let attributes_base = path(FirmwareAttributeLimitManager::PREFIX)
+            .join("tdp0")
+            .join("attributes");
+        let spl_base = attributes_base.join(FirmwareAttributeLimitManager::SPL_SUFFIX);
+        let sppt_base = attributes_base.join(FirmwareAttributeLimitManager::SPPT_SUFFIX);
+        let fppt_base = attributes_base.join(FirmwareAttributeLimitManager::FPPT_SUFFIX);
+        create_dir_all(&spl_base).await.unwrap();
+        write_synced(spl_base.join("current_value"), b"10\n")
+            .await
+            .unwrap();
+        create_dir_all(&sppt_base).await.unwrap();
+        write_synced(sppt_base.join("current_value"), b"10\n")
+            .await
+            .unwrap();
+        create_dir_all(&fppt_base).await.unwrap();
+        write_synced(fppt_base.join("current_value"), b"10\n")
+            .await
+            .unwrap();
+
+        write_synced(spl_base.join("min_value"), b"6\n")
+            .await
+            .unwrap();
+        write_synced(spl_base.join("max_value"), b"20\n")
+            .await
+            .unwrap();
+
+        let manager = tdp_limit_manager().await.unwrap();
+
+        assert_eq!(manager.is_active().await.unwrap(), true);
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 10);
+
+        manager.set_tdp_limit(15).await.unwrap();
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+        assert_eq!(
+            read_to_string(spl_base.join("current_value"))
+                .await
+                .unwrap(),
+            "15"
+        );
+        assert_eq!(
+            read_to_string(sppt_base.join("current_value"))
+                .await
+                .unwrap(),
+            "15"
+        );
+        assert_eq!(
+            read_to_string(fppt_base.join("current_value"))
+                .await
+                .unwrap(),
+            "15"
+        );
+
+        manager.set_tdp_limit(25).await.unwrap_err();
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
+
+        manager.set_tdp_limit(2).await.unwrap_err();
+        assert_eq!(manager.get_tdp_limit().await.unwrap(), 15);
     }
 }

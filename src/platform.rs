@@ -119,6 +119,12 @@ pub(crate) struct BatteryChargeLimitConfig {
 }
 
 #[derive(Clone, Deserialize, Debug)]
+pub(crate) struct FirmwareAttributeConfig {
+    pub attribute: String,
+    pub performance_profile: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Debug)]
 pub(crate) struct PerformanceProfileConfig {
     pub suggested_default: String,
     pub platform_profile_name: String,
@@ -130,6 +136,7 @@ pub(crate) struct TdpLimitConfig {
     pub method: TdpLimitingMethod,
     pub range: Option<RangeConfig<u32>>,
     pub download_mode_limit: Option<NonZeroU32>,
+    pub firmware_attribute: Option<FirmwareAttributeConfig>,
 }
 
 #[derive(Clone, Default, Deserialize, Debug)]

@@ -1026,6 +1026,7 @@ mod test {
                 method: TdpLimitingMethod::GpuHwmon,
                 range: Some(RangeConfig::new(3, 15)),
                 download_mode_limit: NonZeroU32::new(6),
+                firmware_attribute: None,
             }),
             gpu_clocks: Some(RangeConfig::new(200, 1600)),
             battery_charge_limit: Some(BatteryChargeLimitConfig {
