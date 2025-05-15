@@ -54,10 +54,10 @@ impl DeckService {
 
     async fn check_devices(&self, object_manager: &ObjectManagerProxy<'_>) -> Result<()> {
         if device_type().await.unwrap_or(DeviceType::Unknown) == DeviceType::LegionGoS {
-            // There is a bug on the Legion Go S where querying this information
-            // messes up the mapping for the `deck-uhid` target device. It's not
-            // clear exactly what's causing this, so we just skip on the Legion
-            // Go S since it makes a `deck-uhid` target device by default.
+            // There is a bug on the Legion Go S where this function will stall out
+            // other steamos-manager operations until the service is manually restarted
+            // after boot. It's not clear what's causing this issue yet, but skipping
+            // the function works around the stall.
             return Ok(());
         }
         for (path, ifaces) in object_manager.get_managed_objects().await?.into_iter() {
@@ -69,6 +69,13 @@ impl DeckService {
     }
 
     async fn make_deck_from_ifaces_added(&self, msg: InterfacesAdded) -> Result<()> {
+        if device_type().await.unwrap_or(DeviceType::Unknown) == DeviceType::LegionGoS {
+            // There is a bug on the Legion Go S where this function will stall out
+            // other steamos-manager operations until the service is manually restarted
+            // after boot. It's not clear what's causing this issue yet, but skipping
+            // the function works around the stall.
+            return Ok(());
+        }
         let args = msg.args()?;
         if !args
             .interfaces_and_properties
