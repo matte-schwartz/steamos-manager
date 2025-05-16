@@ -169,6 +169,7 @@ impl PlatformConfig {
             DeviceType::SteamDeck => "jupiter",
             DeviceType::LegionGo  => "legion-go",
             DeviceType::LegionGoS => "legion-go-s",
+            DeviceType::ZotacGamingZone => "zotac-gaming-zone",
             _ => return Ok(None),
         };
         let config = read_to_string(format!(
