@@ -166,9 +166,9 @@ impl PlatformConfig {
         let platform = match device_type().await? {
             DeviceType::RogAlly   => "rog-ally",
             DeviceType::RogAllyX  => "rog-ally-x",
-            DeviceType::SteamDeck => "jupiter",
             DeviceType::LegionGo  => "legion-go",
             DeviceType::LegionGoS => "legion-go-s",
+            DeviceType::SteamDeck => "jupiter",
             DeviceType::ZotacGamingZone => "zotac-gaming-zone",
             _ => return Ok(None),
         };
