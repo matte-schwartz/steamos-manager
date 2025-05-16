@@ -165,6 +165,7 @@ impl PlatformConfig {
     async fn load() -> Result<Option<PlatformConfig>> {
         let platform = match device_type().await? {
             DeviceType::SteamDeck => "jupiter",
+            DeviceType::LegionGo  => "legion-go",
             DeviceType::LegionGoS => "legion-go-s",
             _ => return Ok(None),
         };
