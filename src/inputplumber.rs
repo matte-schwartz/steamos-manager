@@ -6,10 +6,12 @@
  */
 
 use anyhow::Result;
+use tokio::spawn;
 use tokio_stream::StreamExt;
 use tracing::{debug, info};
 use zbus::fdo::{InterfacesAdded, ObjectManagerProxy};
 use zbus::names::OwnedInterfaceName;
+use zbus::proxy::CacheProperties;
 use zbus::zvariant::ObjectPath;
 use zbus::Connection;
 
@@ -36,6 +38,7 @@ trait Target {
     fn device_type(&self) -> Result<String>;
 }
 
+#[derive(Clone, Debug)]
 pub struct DeckService {
     connection: Connection,
     composite_device_iface_name: OwnedInterfaceName,
@@ -101,6 +104,7 @@ impl DeckService {
             return Ok(());
         }
         let proxy = CompositeDeviceProxy::builder(&self.connection)
+            .cache_properties(CacheProperties::No)
             .path(path)?
             .build()
             .await?;
@@ -132,7 +136,15 @@ impl Service for DeckService {
 
         loop {
             tokio::select! {
-                Some(iface) = iface_added.next() => self.make_deck_from_ifaces_added(iface).await?,
+                Some(iface) = iface_added.next() => {
+                    // This needs to be done in a separate task to prevent the
+                    // signal listener from filling up. We just clone `self`
+                    // for this since it doesn't hold any state.
+                    let ctx = self.clone();
+                    spawn(async move {
+                        ctx.make_deck_from_ifaces_added(iface).await
+                    });
+                }
             }
         }
     }
