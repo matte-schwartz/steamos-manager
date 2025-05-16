@@ -168,6 +168,7 @@ impl PlatformConfig {
             DeviceType::RogAllyX  => "rog-ally-x",
             DeviceType::LegionGo  => "legion-go",
             DeviceType::LegionGoS => "legion-go-s",
+            DeviceType::Claw      => "claw",
             DeviceType::SteamDeck => "jupiter",
             DeviceType::ZotacGamingZone => "zotac-gaming-zone",
             _ => return Ok(None),
