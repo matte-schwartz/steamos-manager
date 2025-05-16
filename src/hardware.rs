@@ -36,6 +36,7 @@ pub(crate) enum DeviceType {
     #[default]
     Unknown,
     SteamDeck,
+    Claw,
     LegionGo,
     LegionGoS,
     RogAlly,
@@ -88,6 +89,11 @@ pub(crate) async fn device_variant() -> Result<(DeviceType, String)> {
         ("LENOVO", "83L3" | "83N6" | "83Q2" | "83Q3", _) => {
             (DeviceType::LegionGoS, product_name.to_string())
         }
+        (
+            "Micro-Star International Co., Ltd.",
+            "Claw A1M" | "Claw 7 AI+ A2VM" | "Claw 8 AI+ A2VM",
+            _,
+        ) => (DeviceType::Claw, product_name.to_string()),
         ("Valve", _, "Jupiter" | "Galileo") => (DeviceType::SteamDeck, board_name.to_string()),
         ("ZOTAC", _, "G0A1W") => (DeviceType::ZotacGamingZone, board_name.to_string()),
         _ => (DeviceType::Unknown, String::from("unknown")),
