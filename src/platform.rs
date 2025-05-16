@@ -168,6 +168,7 @@ impl PlatformConfig {
             DeviceType::RogAllyX  => "rog-ally-x",
             DeviceType::SteamDeck => "jupiter",
             DeviceType::LegionGoS => "legion-go-s",
+            DeviceType::ZotacGamingZone => "zotac-gaming-zone",
             _ => return Ok(None),
         };
         let config = read_to_string(format!(
