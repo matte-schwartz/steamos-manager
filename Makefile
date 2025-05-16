@@ -25,7 +25,7 @@ install: target/release/steamos-manager target/release/steamosctl
 	install -Ds -m755 "target/release/steamos-manager" "$(DESTDIR)/usr/lib/steamos-manager"
 	install -D -m755 "target/release/steamosctl" "$(DESTDIR)/usr/bin/steamosctl"
 	install -D -m644 -t "$(DESTDIR)/usr/share/steamos-manager/platforms" "data/platforms/"*
-	install -D -m644 LICENSE "$(DESTDIR)/usr/share/licenses/steamos-manager"
+	install -D -m644 LICENSE "$(DESTDIR)/usr/share/licenses/steamos-manager/LICENSE"
 
 	install -m644 "data/system/com.steampowered.SteamOSManager1.service" "$(DESTDIR)/usr/share/dbus-1/system-services/"
 	install -m644 "data/system/com.steampowered.SteamOSManager1.conf" "$(DESTDIR)/usr/share/dbus-1/system.d/"
