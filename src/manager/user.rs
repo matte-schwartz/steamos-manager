@@ -981,6 +981,8 @@ pub(crate) async fn create_interfaces(
             .await?;
     }
 
+    object_server.at(MANAGER_PATH, fdo::ObjectManager {}).await?;
+
     Ok(())
 }
 
