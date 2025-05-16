@@ -15,7 +15,6 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::ObjectPath;
 use zbus::Connection;
 
-use crate::hardware::{device_type, DeviceType};
 use crate::Service;
 
 #[zbus::proxy(
@@ -56,13 +55,6 @@ impl DeckService {
     }
 
     async fn check_devices(&self, object_manager: &ObjectManagerProxy<'_>) -> Result<()> {
-        if device_type().await.unwrap_or(DeviceType::Unknown) == DeviceType::LegionGoS {
-            // There is a bug on the Legion Go S where querying this information
-            // messes up the mapping for the `deck-uhid` target device. It's not
-            // clear exactly what's causing this, so we just skip on the Legion
-            // Go S since it makes a `deck-uhid` target device by default.
-            return Ok(());
-        }
         for (path, ifaces) in object_manager.get_managed_objects().await?.into_iter() {
             if ifaces.contains_key(&self.composite_device_iface_name) {
                 self.make_deck(&path).await?;
@@ -130,16 +122,19 @@ impl Service for DeckService {
         .await?;
         let mut iface_added = object_manager.receive_interfaces_added().await?;
 
-        if let Err(e) = self.check_devices(&object_manager).await {
-            info!("Can't query initial InputPlumber devices: {e}");
-        }
+        // This needs to be done in a separate task to prevent the
+        // signal listener from filling up. We just clone `self`
+        // for this since it doesn't hold any state.
+        let ctx = self.clone();
+        spawn(async move {
+            if let Err(e) = ctx.check_devices(&object_manager).await {
+                info!("Can't query initial InputPlumber devices: {e}");
+            }
+        });
 
         loop {
             tokio::select! {
                 Some(iface) = iface_added.next() => {
-                    // This needs to be done in a separate task to prevent the
-                    // signal listener from filling up. We just clone `self`
-                    // for this since it doesn't hold any state.
                     let ctx = self.clone();
                     spawn(async move {
                         ctx.make_deck_from_ifaces_added(iface).await
