@@ -164,6 +164,7 @@ impl PlatformConfig {
     #[cfg(not(test))]
     async fn load() -> Result<Option<PlatformConfig>> {
         let platform = match device_type().await? {
+            DeviceType::Claw => "claw",
             DeviceType::SteamDeck => "jupiter",
             DeviceType::LegionGoS => "legion-go-s",
             _ => return Ok(None),

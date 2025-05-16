@@ -1,0 +1,12 @@
+[performance_profile]
+platform_profile_name = "msi-wmi-platform"
+# until custom mode is added
+suggested_default = "performance"
+
+[tdp_limit]
+method = "firmware_attribute"
+
+[tdp_limit.firmware_attribute]
+attribute = "msi-wmi-platform"
+# until custom mode is added
+performance_profile = "performance"
