@@ -1376,6 +1376,8 @@ pub(crate) mod test {
         create_dir_all(filename.parent().unwrap()).await?;
         // Writes name file as addgpu so find_hwmon() will find it.
         write_synced(base.join("name"), GPU_HWMON_NAME.as_bytes()).await?;
+        // Create the performance level file so AMD path is taken by get_gpu_performance_controller
+        write_synced(filename, "auto\n".as_bytes()).await?;
         Ok(())
     }
 
@@ -1452,7 +1454,12 @@ CCLK_RANGE in Core0:
         setup().await.expect("setup");
         let base = find_hwmon(GPU_HWMON_NAME).await.unwrap();
         let filename = base.join(GPU_PERFORMANCE_LEVEL_SUFFIX);
-        assert!(get_gpu_performance_level().await.is_err());
+        // After setup(), the performance level should be Auto
+        assert_eq!(
+            get_gpu_performance_level().await.unwrap(),
+            GPUPerformanceLevel::Auto
+        );
+
 
         write(filename.as_path(), "auto\n").await.expect("write");
         assert_eq!(
