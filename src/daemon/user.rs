@@ -145,7 +145,9 @@ pub async fn daemon() -> Result<()> {
         }
     };
 
-    let context = UserContext { session: session.clone() };
+    let context = UserContext {
+        session: session.clone(),
+    };
     let mut daemon = Daemon::new(subscriber, system, rx).await?;
 
     daemon.add_service(mirror_service);
