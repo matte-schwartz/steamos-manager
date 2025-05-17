@@ -17,6 +17,7 @@ use tracing_subscriber::{fmt, Registry};
 #[cfg(not(test))]
 use xdg::BaseDirectories;
 use zbus::connection::{Builder, Connection};
+use zbus::fdo::ObjectManager;
 
 use crate::daemon::{channel, Daemon, DaemonCommand, DaemonContext};
 use crate::job::{JobManager, JobManagerService};
@@ -144,11 +145,13 @@ pub async fn daemon() -> Result<()> {
         }
     };
 
-    let context = UserContext { session };
+    let context = UserContext { session: session.clone() };
     let mut daemon = Daemon::new(subscriber, system, rx).await?;
 
     daemon.add_service(mirror_service);
     daemon.add_service(tdp_service);
+
+    session.object_server().at("/", ObjectManager {}).await?;
 
     daemon.run(context).await
 }
