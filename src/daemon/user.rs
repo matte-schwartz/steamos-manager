@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#[cfg(not(test))]
+use anyhow::anyhow;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -52,8 +54,10 @@ impl DaemonContext for UserContext {
 
     #[cfg(not(test))]
     fn user_config_path(&self) -> Result<PathBuf> {
-        let xdg_base = BaseDirectories::new()?;
-        Ok(xdg_base.get_config_file("steamos-manager"))
+        let xdg_base = BaseDirectories::new();
+        xdg_base
+            .get_config_file("steamos-manager")
+            .ok_or(anyhow!("No config directory found"))
     }
 
     #[cfg(test)]
