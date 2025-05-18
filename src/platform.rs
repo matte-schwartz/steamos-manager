@@ -164,11 +164,11 @@ impl PlatformConfig {
     #[cfg(not(test))]
     async fn load() -> Result<Option<PlatformConfig>> {
         let platform = match device_type().await? {
-            DeviceType::RogAlly   => "rog-ally",
-            DeviceType::RogAllyX  => "rog-ally-x",
-            DeviceType::LegionGo  => "legion-go",
+            DeviceType::RogAlly => "rog-ally",
+            DeviceType::RogAllyX => "rog-ally-x",
+            DeviceType::LegionGo => "legion-go",
             DeviceType::LegionGoS => "legion-go-s",
-            DeviceType::Claw      => "claw",
+            DeviceType::Claw => "claw",
             DeviceType::SteamDeck => "jupiter",
             DeviceType::ZotacGamingZone => "zotac-gaming-zone",
             _ => return Ok(None),

@@ -1457,7 +1457,6 @@ CCLK_RANGE in Core0:
             GPUPerformanceLevel::Auto
         );
 
-
         write(filename.as_path(), "auto\n").await.expect("write");
         assert_eq!(
             get_gpu_performance_level().await.unwrap(),

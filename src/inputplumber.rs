@@ -147,9 +147,7 @@ impl DeckService {
                         "Changing CompositeDevice {} into `{:?}` for {:?}",
                         path, EXPECTED_CLAW_TARGET_TYPES, system_device_type
                     );
-                    proxy
-                        .set_target_devices(EXPECTED_CLAW_TARGET_TYPES)
-                        .await?;
+                    proxy.set_target_devices(EXPECTED_CLAW_TARGET_TYPES).await?;
                 } else {
                     debug!(
                         "CompositeDevice {} is already `{:?}` for {:?}",
