@@ -842,10 +842,7 @@ impl GpuClockController for IntelXeController {
 
 // Helper function to check if a path exists
 async fn path_exists(path: impl AsRef<Path>) -> bool {
-    match try_exists(path).await {
-        Ok(exists) => exists,
-        Err(_) => false,
-    }
+    (try_exists(path).await).unwrap_or(false)
 }
 
 // Helper function to check if a GPU is enabled
