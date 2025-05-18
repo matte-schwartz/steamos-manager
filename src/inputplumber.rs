@@ -8,13 +8,14 @@
 use anyhow::Result;
 use tokio::spawn;
 use tokio_stream::StreamExt;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use zbus::fdo::{InterfacesAdded, ObjectManagerProxy};
 use zbus::names::OwnedInterfaceName;
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::ObjectPath;
 use zbus::Connection;
 
+use crate::hardware::{device_type, DeviceType};
 use crate::Service;
 
 #[zbus::proxy(
@@ -100,13 +101,70 @@ impl DeckService {
             .path(path)?
             .build()
             .await?;
-        if !self.is_deck(&proxy).await? {
-            debug!("Changing CompositeDevice {} into `deck-uhid` type", path);
-            proxy.set_target_devices(&["deck-uhid"]).await
-        } else {
-            debug!("CompositeDevice {} is already `deck-uhid` type", path);
-            Ok(())
+
+        let system_device_type = match device_type().await {
+            Ok(dt) => dt,
+            Err(e) => {
+                error!(
+                    "Failed to get system device type for {}: {}. Skipping inputplumber device configuration.",
+                    path, e
+                );
+                return Ok(());
+            }
+        };
+
+        match system_device_type {
+            DeviceType::SteamDeck => {
+                if !self.is_deck(&proxy).await? {
+                    debug!(
+                        "Changing CompositeDevice {} into `deck-uhid` type for SteamDeck",
+                        path
+                    );
+                    proxy.set_target_devices(&["deck-uhid"]).await?;
+                } else {
+                    debug!(
+                        "CompositeDevice {} is already `deck-uhid` type for SteamDeck",
+                        path
+                    );
+                }
+            }
+            // The MSI Claw lineup needs a keyboard target to be configured in order for the volume
+            // keys to be registered while InputPlumber is running. Creating both a deck-uhid and a
+            // keyboard target works for this.
+            DeviceType::Claw => {
+                const EXPECTED_CLAW_TARGET_TYPES: &[&str] = &["deck-uhid", "keyboard"];
+                let current_target_types = proxy.target_devices().await?;
+
+                let expected_claw_types_vec: Vec<String> = EXPECTED_CLAW_TARGET_TYPES
+                    .iter()
+                    .map(|&s| s.to_string())
+                    .collect();
+
+                let is_correctly_set = current_target_types == expected_claw_types_vec;
+
+                if !is_correctly_set {
+                    debug!(
+                        "Changing CompositeDevice {} into `{:?}` for {:?}",
+                        path, EXPECTED_CLAW_TARGET_TYPES, system_device_type
+                    );
+                    proxy
+                        .set_target_devices(EXPECTED_CLAW_TARGET_TYPES)
+                        .await?;
+                } else {
+                    debug!(
+                        "CompositeDevice {} is already `{:?}` for {:?}",
+                        path, EXPECTED_CLAW_TARGET_TYPES, system_device_type
+                    );
+                }
+            }
+            _ => {
+                debug!(
+                    "CompositeDevice {} (type {:?}). No specific target configuration change.",
+                    path, system_device_type
+                );
+            }
         }
+        Ok(())
     }
 }
 
