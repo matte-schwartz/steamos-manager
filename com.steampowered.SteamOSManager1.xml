@@ -299,6 +299,40 @@
   </interface>
 
   <!--
+      com.steampowered.SteamOSManager1.ScreenReader1
+      @short_description: Optional interface for managing a screen reader.
+  -->
+  <interface name="com.steampowered.SteamOSManager1.ScreenReader1">
+    <!--
+        Enabled
+
+        True if screen reader is enabled, false otherwise.
+    -->
+    <property name="Enabled" type="b" access="readwrite"/>
+
+    <!--
+        Rate
+
+        The rate of speech output. Valid values are 0 for slowest to 100 for fastest.
+    -->
+    <property name="Rate" type="d" access="readwrite"/>
+
+    <!--
+        Pitch
+
+        The pitch for speech output. Valid values are 0.0 for lowest, and 10.0 for highest.
+    -->
+    <property name="Pitch" type="d" access="readwrite"/>
+
+    <!--
+        Volume
+
+        The volume for speech output. Valid values ar 0.0 for off, 10.0 for highest.
+    -->
+    <property name="Volume" type="d" access="readwrite"/>
+  </interface>
+
+  <!--
       com.steampowered.SteamOSManager1.Storage1
       @short_description: Optional interface for managing storage devices
       and filesystems.

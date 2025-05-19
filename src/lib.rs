@@ -25,6 +25,7 @@ mod job;
 mod manager;
 mod platform;
 mod process;
+mod screenreader;
 mod sls;
 mod systemd;
 mod udev;
