@@ -656,7 +656,7 @@ mod test {
         fake_model(SteamDeckVariant::Unknown)
             .await
             .expect("fake_model");
-        assert_eq!(proxy.als_calibration_gain().await.unwrap(), &[]);
+        assert!(proxy.als_calibration_gain().await.unwrap().is_empty());
 
         fake_model(SteamDeckVariant::Jupiter)
             .await
