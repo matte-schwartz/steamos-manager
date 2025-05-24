@@ -633,11 +633,8 @@ impl ScreenReader1 {
 #[interface(name = "com.steampowered.SteamOSManager1.ScreenReader1")]
 impl ScreenReader1 {
     #[zbus(property)]
-    async fn enabled(&self) -> fdo::Result<bool> {
-        match self.screen_reader.enabled().await {
-            Ok(enabled) => Ok(enabled),
-            Err(e) => Err(to_zbus_fdo_error(e)),
-        }
+    async fn enabled(&self) -> bool {
+        self.screen_reader.enabled()
     }
 
     #[zbus(property)]
@@ -649,11 +646,8 @@ impl ScreenReader1 {
     }
 
     #[zbus(property)]
-    async fn rate(&self) -> fdo::Result<f64> {
-        match self.screen_reader.rate().await {
-            Ok(rate) => Ok(rate),
-            Err(e) => Err(to_zbus_fdo_error(e)),
-        }
+    async fn rate(&self) -> f64 {
+        self.screen_reader.rate()
     }
 
     #[zbus(property)]
@@ -665,11 +659,8 @@ impl ScreenReader1 {
     }
 
     #[zbus(property)]
-    async fn pitch(&self) -> fdo::Result<f64> {
-        match self.screen_reader.pitch().await {
-            Ok(pitch) => Ok(pitch),
-            Err(e) => Err(to_zbus_fdo_error(e)),
-        }
+    async fn pitch(&self) -> f64 {
+        self.screen_reader.pitch()
     }
 
     #[zbus(property)]
@@ -681,11 +672,8 @@ impl ScreenReader1 {
     }
 
     #[zbus(property)]
-    async fn volume(&self) -> fdo::Result<f64> {
-        match self.screen_reader.volume().await {
-            Ok(volume) => Ok(volume),
-            Err(e) => Err(to_zbus_fdo_error(e)),
-        }
+    async fn volume(&self) -> f64 {
+        self.screen_reader.volume()
     }
 
     #[zbus(property)]

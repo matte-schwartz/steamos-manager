@@ -5,22 +5,41 @@
  * SPDX-License-Identifier: MIT
  */
 
-use anyhow::{anyhow, Result};
-use std::fs::File;
-use std::io::Read;
-use std::io::Write;
-//use std::process::{Child, Command};
-use serde_json::{json, Value};
+use anyhow::{anyhow, bail, ensure, Result};
+use lazy_static::lazy_static;
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::ops::RangeInclusive;
+use std::path::PathBuf;
 use std::process::Command;
-use tracing::{info, warn};
+use tokio::fs::{read_to_string, write};
+use tracing::{debug, error, info, trace, warn};
+#[cfg(not(test))]
+use xdg::BaseDirectories;
 use zbus::Connection;
 
+#[cfg(test)]
+use crate::path;
 use crate::systemd::SystemdUnit;
 
-const ORCA_SETTINGS: &str = "/home/deck/.local/share/orca/user-settings.conf";
+#[cfg(not(test))]
+const ORCA_SETTINGS: &str = "orca/user-settings.conf";
 const PITCH_SETTING: &str = "average-pitch";
 const RATE_SETTING: &str = "rate";
 const VOLUME_SETTING: &str = "gain";
+const ENABLE_SETTING: &str = "enableSpeech";
+
+const PITCH_DEFAULT: f64 = 1.0;
+const RATE_DEFAULT: f64 = 1.0;
+const VOLUME_DEFAULT: f64 = 1.0;
+
+lazy_static! {
+    static ref VALID_SETTINGS: HashMap<&'static str, RangeInclusive<f64>> = HashMap::from_iter([
+        (PITCH_SETTING, (0.0..=10.0)),
+        (RATE_SETTING, (0.0..=100.0)),
+        (VOLUME_SETTING, (0.0..=10.0)),
+    ]);
+}
 
 pub(crate) struct OrcaManager<'dbus> {
     orca_unit: SystemdUnit<'dbus>,
@@ -34,256 +53,231 @@ impl<'dbus> OrcaManager<'dbus> {
     pub async fn new(connection: &Connection) -> Result<OrcaManager<'dbus>> {
         let mut manager = OrcaManager {
             orca_unit: SystemdUnit::new(connection.clone(), "orca.service").await?,
-            rate: 1.0,
-            pitch: 1.0,
-            volume: 1.0,
+            rate: RATE_DEFAULT,
+            pitch: PITCH_DEFAULT,
+            volume: VOLUME_DEFAULT,
             enabled: true,
         };
-        manager.load_values()?;
+        let _ = manager
+            .load_values()
+            .await
+            .inspect_err(|e| warn!("Failed to load orca configuration: {e}"));
         Ok(manager)
     }
 
-    pub async fn enabled(&self) -> Result<bool> {
-        // Check if screen reader is enabled
-        Ok(self.enabled)
+    #[cfg(not(test))]
+    fn settings_path(&self) -> Result<PathBuf> {
+        let xdg_base = BaseDirectories::new();
+        Ok(xdg_base
+            .get_data_home()
+            .ok_or(anyhow!("No XDG_DATA_HOME found"))?
+            .join(ORCA_SETTINGS))
     }
 
-    pub async fn set_enabled(&mut self, enable: bool) -> std::io::Result<()> {
-        // Set screen reader enabled based on value of enable
+    #[cfg(test)]
+    fn settings_path(&self) -> Result<PathBuf> {
+        Ok(path("orca-settings.conf"))
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub async fn set_enabled(&mut self, enable: bool) -> Result<()> {
+        if self.enabled == enable {
+            return Ok(());
+        }
+
         if enable {
             // Enable screen reader gsettings
-            let _ = Command::new("gsettings")
+            Command::new("gsettings")
                 .args([
                     "set",
                     "org.gnome.desktop.a11y.applications",
                     "screen-reader-enabled",
                     "true",
                 ])
-                .spawn();
+                .spawn()?;
             // Set orca enabled also
-            let _setting_result = self.set_orca_enabled(true);
-            let _result = self.restart_orca().await;
+            self.set_orca_enabled(true).await?;
+            self.restart_orca().await?;
         } else {
             // Disable screen reader gsettings
-            let _ = Command::new("gsettings")
+            Command::new("gsettings")
                 .args([
                     "set",
                     "org.gnome.desktop.a11y.applications",
                     "screen-reader-enabled",
                     "false",
                 ])
-                .spawn();
+                .spawn()?;
             // Set orca disabled also
-            let _setting_result = self.set_orca_enabled(false);
-            // Stop orca
-            let _result = self.stop_orca().await;
+            self.set_orca_enabled(false).await?;
+            self.stop_orca().await?;
         }
         self.enabled = enable;
         Ok(())
     }
 
-    pub async fn pitch(&self) -> Result<f64> {
-        Ok(self.pitch)
+    pub fn pitch(&self) -> f64 {
+        self.pitch
     }
 
     pub async fn set_pitch(&mut self, pitch: f64) -> Result<()> {
-        info!("set_pitch called with {:?}", pitch);
+        trace!("set_pitch called with {pitch}");
 
-        let result = self.set_orca_option(PITCH_SETTING.to_owned(), pitch);
-        match result {
-            Ok(_) => {
-                self.pitch = pitch;
-                Ok(())
-            }
-            Err(_) => Err(anyhow!("Unable to set orca pitch value")),
-        }
+        self.set_orca_option(PITCH_SETTING, pitch).await?;
+        self.pitch = pitch;
+        Ok(())
     }
 
-    pub async fn rate(&self) -> Result<f64> {
-        Ok(self.rate)
+    pub fn rate(&self) -> f64 {
+        self.rate
     }
 
     pub async fn set_rate(&mut self, rate: f64) -> Result<()> {
-        info!("set_rate called with {:?}", rate);
+        trace!("set_rate called with {rate}");
 
-        let result = self.set_orca_option(RATE_SETTING.to_owned(), rate);
-        match result {
-            Ok(_) => {
-                self.rate = rate;
-                Ok(())
-            }
-            Err(_) => Err(anyhow!("Unable to set orca rate")),
-        }
+        self.set_orca_option(RATE_SETTING, rate).await?;
+        self.rate = rate;
+        Ok(())
     }
 
-    pub async fn volume(&self) -> Result<f64> {
-        Ok(self.volume)
+    pub fn volume(&self) -> f64 {
+        self.volume
     }
 
     pub async fn set_volume(&mut self, volume: f64) -> Result<()> {
-        info!("set_volume called with {:?}", volume);
+        trace!("set_volume called with {volume}");
 
-        let result = self.set_orca_option(VOLUME_SETTING.to_owned(), volume);
-        match result {
-            Ok(_) => {
-                self.volume = volume;
-                Ok(())
-            }
-            Err(_) => Err(anyhow!("Unable to set orca volume")),
-        }
+        self.set_orca_option(VOLUME_SETTING, volume).await?;
+        self.volume = volume;
+        Ok(())
     }
 
-    fn set_orca_enabled(&mut self, enabled: bool) -> Result<()> {
+    async fn set_orca_enabled(&mut self, enabled: bool) -> Result<()> {
         // Change json file
-        let mut file = File::open(ORCA_SETTINGS)?;
-        let mut data = String::new();
-        file.read_to_string(&mut data)?;
-
+        let data = read_to_string(self.settings_path()?).await?;
         let mut json: Value = serde_json::from_str(&data)?;
 
-        if let Some(general) = json.get_mut("general") {
-            if let Some(enable_speech) = general.get_mut("enableSpeech") {
-                *enable_speech = json!(&enabled);
-            } else {
-                warn!("No enabledSpeech value in general in orca settings");
-            }
-        } else {
-            warn!("No general section in orca settings");
-        }
+        let general = json
+            .as_object_mut()
+            .ok_or(anyhow!("orca user-settings.conf json is not an object"))?
+            .entry("general")
+            .or_insert(Value::Object(Map::new()));
+        general
+            .as_object_mut()
+            .ok_or(anyhow!("orca user-settings.conf general is not an object"))?
+            .insert(ENABLE_SETTING.to_string(), Value::Bool(enabled));
 
-        data = serde_json::to_string_pretty(&json)?;
-
-        let mut out_file = File::create(ORCA_SETTINGS)?;
-        match out_file.write_all(&data.into_bytes()) {
-            Ok(_) => {
-                self.enabled = enabled;
-                Ok(())
-            }
-            Err(_) => Err(anyhow!("Unable to write orca settings file")),
-        }
+        let data = serde_json::to_string_pretty(&json)?;
+        Ok(write(self.settings_path()?, data.as_bytes()).await?)
     }
 
-    fn load_values(&mut self) -> Result<()> {
-        info!("Loading orca values from user-settings.conf");
-        let mut file = File::open(ORCA_SETTINGS)?;
-        let mut data = String::new();
-        file.read_to_string(&mut data)?;
-
+    async fn load_values(&mut self) -> Result<()> {
+        debug!("Loading orca values from user-settings.conf");
+        let data = read_to_string(self.settings_path()?).await?;
         let json: Value = serde_json::from_str(&data)?;
 
-        if let Some(profiles) = json.get("profiles") {
-            if let Some(default_profile) = profiles.get("default") {
-                if let Some(voices) = default_profile.get("voices") {
-                    if let Some(default_voice) = voices.get("default") {
-                        if let Some(pitch) = default_voice.get(PITCH_SETTING.to_owned()) {
-                            self.pitch = pitch
-                                .as_f64()
-                                .expect("Unable to convert orca pitch setting to float value");
-                        } else {
-                            warn!("Unable to load default pitch from orca user-settings.conf");
-                        }
-
-                        if let Some(rate) = default_voice.get(RATE_SETTING.to_owned()) {
-                            self.rate = rate
-                                .as_f64()
-                                .expect("Unable to convert orca rate setting to float value");
-                        } else {
-                            warn!("Unable to load default voice rate from orca user-settings.conf");
-                        }
-
-                        if let Some(volume) = default_voice.get(VOLUME_SETTING.to_owned()) {
-                            self.volume = volume
-                                .as_f64()
-                                .expect("Unable to convert orca volume value to float value");
-                        } else {
-                            warn!(
-                                "Unable to load default voice volume from orca user-settings.conf"
-                            );
-                        }
-                    } else {
-                        warn!("Orca user-settings.conf missing default voice");
-                    }
-                } else {
-                    warn!("Orca user-settings.conf missing voices list");
-                }
-            } else {
-                warn!("Orca user-settings.conf missing default profile");
-            }
+        let Some(default_voice) = json
+            .get("profiles")
+            .and_then(|profiles| profiles.get("default"))
+            .and_then(|default_profile| default_profile.get("voices"))
+            .and_then(|voices| voices.get("default"))
+        else {
+            warn!("Orca user-settings.conf missing default voice");
+            self.pitch = PITCH_DEFAULT;
+            self.rate = RATE_DEFAULT;
+            self.volume = VOLUME_DEFAULT;
+            return Ok(());
+        };
+        if let Some(pitch) = default_voice.get(PITCH_SETTING) {
+            self.pitch = pitch.as_f64().unwrap_or_else(|| {
+                error!("Unable to convert orca pitch setting to float value");
+                PITCH_DEFAULT
+            });
         } else {
-            warn!("Orca user-settings.conf missing profiles");
+            warn!("Unable to load default pitch from orca user-settings.conf");
+            self.pitch = PITCH_DEFAULT;
+        }
+
+        if let Some(rate) = default_voice.get(RATE_SETTING) {
+            self.rate = rate.as_f64().unwrap_or_else(|| {
+                error!("Unable to convert orca rate setting to float value");
+                RATE_DEFAULT
+            });
+        } else {
+            warn!("Unable to load default voice rate from orca user-settings.conf");
+        }
+
+        if let Some(volume) = default_voice.get(VOLUME_SETTING) {
+            self.volume = volume.as_f64().unwrap_or_else(|| {
+                error!("Unable to convert orca volume value to float value");
+                VOLUME_DEFAULT
+            });
+        } else {
+            warn!("Unable to load default voice volume from orca user-settings.conf");
         }
         info!(
-            "Done loading orca user-settings.conf, values: Rate: {:?}, Pitch: {:?}, Volume: {:?}",
+            "Done loading orca user-settings.conf, values: Rate: {}, Pitch: {}, Volume: {}",
             self.rate, self.pitch, self.volume
         );
 
         Ok(())
     }
 
-    fn set_orca_option(&self, option: String, value: f64) -> Result<()> {
-        // Verify option is one we know about
-        // Verify value is in range
-        // Change json file
-        let mut file = File::open(ORCA_SETTINGS)?;
-        let mut data = String::new();
-        file.read_to_string(&mut data)?;
-
+    async fn set_orca_option(&self, option: &str, value: f64) -> Result<()> {
+        if let Some(range) = VALID_SETTINGS.get(option) {
+            ensure!(
+                range.contains(&value),
+                "orca option {option} value {value} out of range"
+            );
+        } else {
+            bail!("Invalid orca option {option}");
+        }
+        let data = read_to_string(self.settings_path()?).await?;
         let mut json: Value = serde_json::from_str(&data)?;
 
-        if let Some(profiles) = json.get_mut("profiles") {
-            if let Some(default_profile) = profiles.get_mut("default") {
-                if let Some(voices) = default_profile.get_mut("voices") {
-                    if let Some(default_voice) = voices.get_mut("default") {
-                        if let Some(mut_option) = default_voice.get_mut(&option) {
-                            *mut_option = json!(value);
-                        } else {
-                            let object = default_voice.as_object_mut().ok_or(anyhow!(
-                                "Unable to generate mutable object for adding {:?} with value {:?}",
-                                &option,
-                                value
-                            ))?;
-                            object.insert(option, json!(value));
-                        }
-                    } else {
-                        warn!(
-                            "No default voice in voices list to set {:?} to {:?} in",
-                            &option, value
-                        );
-                    }
-                } else {
-                    warn!(
-                        "No voices in default profile to set {:?} to {:?} in",
-                        &option, value
-                    );
-                }
-            } else {
-                warn!("No default profile to set {:?} to {:?} in", &option, value);
-            }
-        } else {
-            warn!("No profiles in orca user-settings.conf to modify");
-        }
+        let profiles = json
+            .as_object_mut()
+            .ok_or(anyhow!("orca user-settings.conf json is not an object"))?
+            .entry("profiles")
+            .or_insert(Value::Object(Map::new()));
+        let default_profile = profiles
+            .as_object_mut()
+            .ok_or(anyhow!("orca user-settings.conf profiles is not an object"))?
+            .entry("default")
+            .or_insert(Value::Object(Map::new()));
+        let voices = default_profile
+            .as_object_mut()
+            .ok_or(anyhow!(
+                "orca user-settings.conf default profile is not an object"
+            ))?
+            .entry("voices")
+            .or_insert(Value::Object(Map::new()));
+        let default_voice = voices
+            .as_object_mut()
+            .ok_or(anyhow!("orca user-settings.conf voices is not an object"))?
+            .entry("default")
+            .or_insert(Value::Object(Map::new()));
+        default_voice
+            .as_object_mut()
+            .ok_or(anyhow!(
+                "orca user-settings.conf default voice is not an object"
+            ))?
+            .insert(option.to_string(), value.into());
 
-        data = serde_json::to_string_pretty(&json)?;
-
-        let mut out_file = File::create(ORCA_SETTINGS)?;
-        match out_file.write_all(&data.into_bytes()) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(anyhow!("Unable to write orca settings file")),
-        }
+        let data = serde_json::to_string_pretty(&json)?;
+        Ok(write(self.settings_path()?, data.as_bytes()).await?)
     }
 
     async fn restart_orca(&self) -> Result<()> {
-        info!("Restarting orca...");
-        let _result = self.orca_unit.restart().await;
-        info!("Done restarting orca...");
-        Ok(())
+        trace!("Restarting orca...");
+        self.orca_unit.restart().await
     }
 
     async fn stop_orca(&self) -> Result<()> {
-        // Stop orca user unit
-        info!("Stopping orca...");
-        let _result = self.orca_unit.stop().await;
-        info!("Done stopping orca...");
-        Ok(())
+        trace!("Stopping orca...");
+        self.orca_unit.stop().await
     }
 }
