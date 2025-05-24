@@ -29,9 +29,9 @@ const RATE_SETTING: &str = "rate";
 const VOLUME_SETTING: &str = "gain";
 const ENABLE_SETTING: &str = "enableSpeech";
 
-const PITCH_DEFAULT: f64 = 1.0;
-const RATE_DEFAULT: f64 = 1.0;
-const VOLUME_DEFAULT: f64 = 1.0;
+const PITCH_DEFAULT: f64 = 5.0;
+const RATE_DEFAULT: f64 = 50.0;
+const VOLUME_DEFAULT: f64 = 10.0;
 
 lazy_static! {
     static ref VALID_SETTINGS: HashMap<&'static str, RangeInclusive<f64>> = HashMap::from_iter([
