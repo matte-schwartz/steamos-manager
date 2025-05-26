@@ -36,8 +36,7 @@ pub(crate) enum DeviceType {
     #[default]
     Unknown,
     SteamDeck,
-    LegionGo,
-    LegionGoS,
+    LegionGoSeries,
     RogAlly,
     RogAllyX,
     ZotacGamingZone,
@@ -84,9 +83,8 @@ pub(crate) async fn device_variant() -> Result<(DeviceType, String)> {
     Ok(match (sys_vendor.trim_end(), product_name, board_name) {
         ("ASUSTeK COMPUTER INC.", _, "RC71L") => (DeviceType::RogAlly, board_name.to_string()),
         ("ASUSTeK COMPUTER INC.", _, "RC72LA") => (DeviceType::RogAllyX, board_name.to_string()),
-        ("LENOVO", "83E1", _) => (DeviceType::LegionGo, product_name.to_string()),
-        ("LENOVO", "83L3" | "83N6" | "83Q2" | "83Q3", _) => {
-            (DeviceType::LegionGoS, product_name.to_string())
+        ("LENOVO", "83E1" | "83L3" | "83N6" | "83Q2" | "83Q3", _) => {
+            (DeviceType::LegionGoSeries, product_name.to_string())
         }
         ("Valve", _, "Jupiter" | "Galileo") => (DeviceType::SteamDeck, board_name.to_string()),
         ("ZOTAC", _, "G0A1W") => (DeviceType::ZotacGamingZone, board_name.to_string()),
@@ -218,6 +216,18 @@ pub mod test {
             (DeviceType::Unknown, String::from("unknown"))
         );
 
+        write(crate::path(PRODUCT_NAME_PATH), "83E1\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::LegionGoSeries, String::from("83E1"))
+        );
+
         write(crate::path(PRODUCT_NAME_PATH), "83L3\n")
             .await
             .expect("write");
@@ -227,7 +237,7 @@ pub mod test {
         );
         assert_eq!(
             device_variant().await.unwrap(),
-            (DeviceType::LegionGoS, String::from("83L3"))
+            (DeviceType::LegionGoSeries, String::from("83L3"))
         );
 
         write(crate::path(PRODUCT_NAME_PATH), "83N6\n")
@@ -239,7 +249,7 @@ pub mod test {
         );
         assert_eq!(
             device_variant().await.unwrap(),
-            (DeviceType::LegionGoS, String::from("83N6"))
+            (DeviceType::LegionGoSeries, String::from("83N6"))
         );
 
         write(crate::path(PRODUCT_NAME_PATH), "83Q2\n")
@@ -251,7 +261,7 @@ pub mod test {
         );
         assert_eq!(
             device_variant().await.unwrap(),
-            (DeviceType::LegionGoS, String::from("83Q2"))
+            (DeviceType::LegionGoSeries, String::from("83Q2"))
         );
 
         write(crate::path(PRODUCT_NAME_PATH), "83Q3\n")
@@ -263,7 +273,7 @@ pub mod test {
         );
         assert_eq!(
             device_variant().await.unwrap(),
-            (DeviceType::LegionGoS, String::from("83Q3"))
+            (DeviceType::LegionGoSeries, String::from("83Q3"))
         );
 
         write(crate::path(SYS_VENDOR_PATH), "Valve\n")
