@@ -6,12 +6,12 @@
  */
 
 use anyhow::{anyhow, bail, ensure, Result};
+use gio::{prelude::SettingsExt, Settings};
 use lazy_static::lazy_static;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
-use std::process::Command;
 use tokio::fs::{read_to_string, write};
 use tracing::{debug, error, info, trace, warn};
 #[cfg(not(test))]
@@ -28,6 +28,9 @@ const PITCH_SETTING: &str = "average-pitch";
 const RATE_SETTING: &str = "rate";
 const VOLUME_SETTING: &str = "gain";
 const ENABLE_SETTING: &str = "enableSpeech";
+
+const A11Y_SETTING: &str = "org.gnome.desktop.a11y.applications";
+const SCREEN_READER_SETTING: &str = "screen-reader-enabled";
 
 const PITCH_DEFAULT: f64 = 5.0;
 const RATE_DEFAULT: f64 = 50.0;
@@ -62,6 +65,8 @@ impl<'dbus> OrcaManager<'dbus> {
             .load_values()
             .await
             .inspect_err(|e| warn!("Failed to load orca configuration: {e}"));
+        let a11ysettings = Settings::new(A11Y_SETTING);
+        manager.enabled = a11ysettings.boolean(SCREEN_READER_SETTING);
         Ok(manager)
     }
 
@@ -88,29 +93,18 @@ impl<'dbus> OrcaManager<'dbus> {
             return Ok(());
         }
 
+        {
+            let a11ysettings = Settings::new(A11Y_SETTING);
+            a11ysettings
+                .set_boolean(SCREEN_READER_SETTING, enable)
+                .map_err(|e| anyhow!("Unable to set screen reader enabled gsetting, {}", e))?;
+            // Settings::sync();
+        }
         if enable {
-            // Enable screen reader gsettings
-            Command::new("gsettings")
-                .args([
-                    "set",
-                    "org.gnome.desktop.a11y.applications",
-                    "screen-reader-enabled",
-                    "true",
-                ])
-                .spawn()?;
             // Set orca enabled also
             self.set_orca_enabled(true).await?;
             self.restart_orca().await?;
         } else {
-            // Disable screen reader gsettings
-            Command::new("gsettings")
-                .args([
-                    "set",
-                    "org.gnome.desktop.a11y.applications",
-                    "screen-reader-enabled",
-                    "false",
-                ])
-                .spawn()?;
             // Set orca disabled also
             self.set_orca_enabled(false).await?;
             self.stop_orca().await?;
