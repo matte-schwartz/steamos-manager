@@ -93,6 +93,7 @@ impl<'dbus> OrcaManager<'dbus> {
             return Ok(());
         }
 
+        #[cfg(not(test))]
         {
             let a11ysettings = Settings::new(A11Y_SETTING);
             a11ysettings
@@ -261,13 +262,114 @@ impl<'dbus> OrcaManager<'dbus> {
         Ok(write(self.settings_path()?, data.as_bytes()).await?)
     }
 
+    #[cfg(not(test))]
     async fn restart_orca(&self) -> Result<()> {
         trace!("Restarting orca...");
         self.orca_unit.restart().await
     }
 
+    #[cfg(test)]
+    async fn restart_orca(&self) -> Result<()> {
+        Ok(())
+    }
+
+    #[cfg(not(test))]
     async fn stop_orca(&self) -> Result<()> {
         trace!("Stopping orca...");
         self.orca_unit.stop().await
     }
+
+    #[cfg(test)]
+    async fn stop_orca(&self) -> Result<()> {
+        Ok(())
+    }
+
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::testing;
+    use tokio::fs::symlink;
+
+    #[tokio::test]
+    async fn test_enable_disable() {
+        let mut h = testing::start();
+        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        let mut manager =
+            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+                .await
+                .expect("OrcaManager::new");
+        let enable_result = manager.set_enabled(true).await;
+        assert!(enable_result.is_ok());
+        assert_eq!(manager.enabled(), true);
+
+        let disable_result = manager.set_enabled(false).await;
+        assert!(disable_result.is_ok());
+        assert_eq!(manager.enabled(), false);
+    }
+
+    #[tokio::test]
+    async fn test_pitch() {
+        let mut h = testing::start();
+        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        let mut manager =
+            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+                .await
+                .expect("OrcaManager::new");
+        let set_result = manager.set_pitch(5.0).await;
+        assert!(set_result.is_ok());
+        assert_eq!(manager.pitch(), 5.0);
+
+        let too_low_result = manager.set_pitch(-1.0).await;
+        assert!(too_low_result.is_err());
+        assert_eq!(manager.pitch(), 5.0);
+
+        let too_high_result = manager.set_pitch(12.0).await;
+        assert!(too_high_result.is_err());
+        assert_eq!(manager.pitch(), 5.0);
+    }
+
+    #[tokio::test]
+    async fn test_rate() {
+        let mut h = testing::start();
+        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        let mut manager =
+            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+                .await
+                .expect("OrcaManager::new");
+        let set_result = manager.set_rate(5.0).await;
+        assert!(set_result.is_ok());
+        assert_eq!(manager.rate(), 5.0);
+
+        let too_low_result = manager.set_rate(-1.0).await;
+        assert!(too_low_result.is_err());
+        assert_eq!(manager.rate(), 5.0);
+
+        let too_high_result = manager.set_rate(101.0).await;
+        assert!(too_high_result.is_err());
+        assert_eq!(manager.rate(), 5.0);
+    }
+
+    #[tokio::test]
+    async fn test_volume() {
+        let mut h = testing::start();
+        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        let mut manager =
+            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+                .await
+                .expect("OrcaManager::new");
+        let set_result = manager.set_volume(5.0).await;
+        assert!(set_result.is_ok());
+        assert_eq!(manager.volume(), 5.0);
+
+        let too_low_result = manager.set_volume(-1.0).await;
+        assert!(too_low_result.is_err());
+        assert_eq!(manager.volume(), 5.0);
+
+        let too_high_result = manager.set_volume(12.0).await;
+        assert!(too_high_result.is_err());
+        assert_eq!(manager.volume(), 5.0);
+    }
+
 }
