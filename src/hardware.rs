@@ -200,6 +200,48 @@ pub mod test {
         assert!(steam_deck_variant().await.is_err());
         assert!(device_variant().await.is_err());
 
+        write(crate::path(SYS_VENDOR_PATH), "ASUSTeK COMPUTER INC.\n")
+            .await
+            .expect("write");
+        write(crate::path(BOARD_NAME_PATH), "INVALID\n")
+            .await
+            .expect("write");
+        write(crate::path(PRODUCT_NAME_PATH), "INVALID\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::Unknown, String::from("unknown"))
+        );
+
+        write(crate::path(BOARD_NAME_PATH), "RC71L\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::RogAlly, String::from("RC71L"))
+        );
+
+        write(crate::path(BOARD_NAME_PATH), "RC72LA\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::RogAllyX, String::from("RC72LA"))
+        );
+
         write(crate::path(SYS_VENDOR_PATH), "LENOVO\n")
             .await
             .expect("write");
@@ -216,6 +258,18 @@ pub mod test {
         assert_eq!(
             device_variant().await.unwrap(),
             (DeviceType::Unknown, String::from("unknown"))
+        );
+
+        write(crate::path(PRODUCT_NAME_PATH), "83E1\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::LegionGo, String::from("83E1"))
         );
 
         write(crate::path(PRODUCT_NAME_PATH), "83L3\n")
