@@ -6,7 +6,7 @@
  */
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -16,8 +16,8 @@ use steamos_manager::power::{CPUScalingGovernor, GPUPerformanceLevel, GPUPowerPr
 use steamos_manager::proxy::{
     AmbientLightSensor1Proxy, BatteryChargeLimit1Proxy, CpuScaling1Proxy, FactoryReset1Proxy,
     FanControl1Proxy, GpuPerformanceLevel1Proxy, GpuPowerProfile1Proxy, HdmiCec1Proxy,
-    LowPowerMode1Proxy, Manager2Proxy, PerformanceProfile1Proxy, Storage1Proxy, TdpLimit1Proxy,
-    UpdateBios1Proxy, UpdateDock1Proxy, WifiDebug1Proxy, WifiDebugDump1Proxy,
+    LowPowerMode1Proxy, Manager2Proxy, PerformanceProfile1Proxy, ScreenReader0Proxy, Storage1Proxy,
+    TdpLimit1Proxy, UpdateBios1Proxy, UpdateDock1Proxy, WifiDebug1Proxy, WifiDebugDump1Proxy,
     WifiPowerManagement1Proxy,
 };
 use steamos_manager::wifi::{WifiBackend, WifiDebugMode, WifiPowerManagement};
@@ -206,6 +206,42 @@ enum Commands {
 
     /// Get the model and variant of this device, if known
     GetDeviceModel,
+
+    /// Get whether screen reader is enabled or not.
+    GetScreenReaderEnabled,
+
+    /// Enable or disable the screen reader
+    SetScreenReaderEnabled {
+        #[arg(action = ArgAction::Set, required = true)]
+        enable: bool,
+    },
+
+    /// Get screen reader rate
+    GetScreenReaderRate,
+
+    /// Set screen reader rate
+    SetScreenReaderRate {
+        /// Valid rates between 0.0 for slowest and 100.0 for fastest.
+        rate: f64,
+    },
+
+    /// Get screen reader pitch
+    GetScreenReaderPitch,
+
+    /// Set screen reader pitch
+    SetScreenReaderPitch {
+        /// Valid pitches between 0.0 for lowest and 10.0 for highest.
+        pitch: f64,
+    },
+
+    /// Get screen reader volume
+    GetScreenReaderVolume,
+
+    /// Set screen reader volume
+    SetScreenReaderVolume {
+        /// Valid volume between 0.0 for off, and 10.0 for loudest.
+        volume: f64,
+    },
 }
 
 async fn get_all_properties(conn: &Connection) -> Result<()> {
@@ -518,6 +554,42 @@ async fn main() -> Result<()> {
             let (device, variant) = proxy.device_model().await?;
             println!("Model: {device}");
             println!("Variant: {variant}");
+        }
+        Commands::GetScreenReaderEnabled => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            let enabled = proxy.enabled().await?;
+            println!("Enabled: {enabled}");
+        }
+        Commands::SetScreenReaderEnabled { enable } => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            proxy.set_enabled(*enable).await?;
+        }
+        Commands::GetScreenReaderRate => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            let rate = proxy.rate().await?;
+            println!("Rate: {rate}");
+        }
+        Commands::SetScreenReaderRate { rate } => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            proxy.set_rate(*rate).await?;
+        }
+        Commands::GetScreenReaderPitch => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            let pitch = proxy.pitch().await?;
+            println!("Pitch: {pitch}");
+        }
+        Commands::SetScreenReaderPitch { pitch } => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            proxy.set_pitch(*pitch).await?;
+        }
+        Commands::GetScreenReaderVolume => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            let volume = proxy.volume().await?;
+            println!("Volume: {volume}");
+        }
+        Commands::SetScreenReaderVolume { volume } => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            proxy.set_volume(*volume).await?;
         }
     }
 
