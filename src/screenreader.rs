@@ -283,19 +283,23 @@ impl<'dbus> OrcaManager<'dbus> {
     async fn stop_orca(&self) -> Result<()> {
         Ok(())
     }
-
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::testing;
-    use tokio::fs::symlink;
+    use tokio::fs::copy;
 
     #[tokio::test]
     async fn test_enable_disable() {
         let mut h = testing::start();
-        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        copy(
+            "data/test-orca-settings.conf",
+            h.test.path().join("orca-settings.conf"),
+        )
+        .await
+        .unwrap();
         let mut manager =
             OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
                 .await
@@ -312,7 +316,12 @@ mod test {
     #[tokio::test]
     async fn test_pitch() {
         let mut h = testing::start();
-        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        copy(
+            "data/test-orca-settings.conf",
+            h.test.path().join("orca-settings.conf"),
+        )
+        .await
+        .unwrap();
         let mut manager =
             OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
                 .await
@@ -333,7 +342,12 @@ mod test {
     #[tokio::test]
     async fn test_rate() {
         let mut h = testing::start();
-        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        copy(
+            "data/test-orca-settings.conf",
+            h.test.path().join("orca-settings.conf"),
+        )
+        .await
+        .unwrap();
         let mut manager =
             OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
                 .await
@@ -354,7 +368,12 @@ mod test {
     #[tokio::test]
     async fn test_volume() {
         let mut h = testing::start();
-        let _ = symlink("data/test-orca-settings.conf", h.test.path().join("orca-settings.conf")).await;
+        copy(
+            "data/test-orca-settings.conf",
+            h.test.path().join("orca-settings.conf"),
+        )
+        .await
+        .unwrap();
         let mut manager =
             OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
                 .await
@@ -371,5 +390,4 @@ mod test {
         assert!(too_high_result.is_err());
         assert_eq!(manager.volume(), 5.0);
     }
-
 }
