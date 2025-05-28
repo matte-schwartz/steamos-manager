@@ -301,8 +301,11 @@
   <!--
       com.steampowered.SteamOSManager1.ScreenReader1
       @short_description: Optional interface for managing a screen reader.
+    
+      This interface is considered unstable and may change between verisons.
+      Once it is considered stable it will be renamed to ScreenReader1
   -->
-  <interface name="com.steampowered.SteamOSManager1.ScreenReader1">
+  <interface name="com.steampowered.SteamOSManager1.ScreenReader0">
     <!--
         Enabled
 

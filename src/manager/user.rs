@@ -154,7 +154,7 @@ struct PerformanceProfile1 {
     tdp_limit_manager: UnboundedSender<TdpManagerCommand>,
 }
 
-struct ScreenReader1 {
+struct ScreenReader0 {
     screen_reader: OrcaManager<'static>,
 }
 
@@ -623,15 +623,15 @@ impl PerformanceProfile1 {
     }
 }
 
-impl ScreenReader1 {
-    async fn new(connection: &Connection) -> Result<ScreenReader1> {
+impl ScreenReader0 {
+    async fn new(connection: &Connection) -> Result<ScreenReader0> {
         let screen_reader = OrcaManager::new(connection).await?;
-        Ok(ScreenReader1 { screen_reader })
+        Ok(ScreenReader0 { screen_reader })
     }
 }
 
-#[interface(name = "com.steampowered.SteamOSManager1.ScreenReader1")]
-impl ScreenReader1 {
+#[interface(name = "com.steampowered.SteamOSManager1.ScreenReader0")]
+impl ScreenReader0 {
     #[zbus(property)]
     async fn enabled(&self) -> bool {
         self.screen_reader.enabled()
@@ -986,7 +986,7 @@ pub(crate) async fn create_interfaces(
         proxy: proxy.clone(),
         channel: daemon,
     };
-    let screen_reader = ScreenReader1::new(&session).await?;
+    let screen_reader = ScreenReader0::new(&session).await?;
     let wifi_debug = WifiDebug1 {
         proxy: proxy.clone(),
     };
