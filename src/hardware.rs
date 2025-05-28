@@ -218,6 +218,18 @@ pub mod test {
             (DeviceType::Unknown, String::from("unknown"))
         );
 
+        write(crate::path(PRODUCT_NAME_PATH), "83E1\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::LegionGo, String::from("83E1"))
+        );
+
         write(crate::path(PRODUCT_NAME_PATH), "83L3\n")
             .await
             .expect("write");
