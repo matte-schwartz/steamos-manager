@@ -97,16 +97,12 @@ impl<'dbus> OrcaManager<'dbus> {
             let a11ysettings = Settings::new(A11Y_SETTING);
             a11ysettings
                 .set_boolean(SCREEN_READER_SETTING, enable)
-                .map_err(|e| anyhow!("Unable to set screen reader enabled gsetting, {}", e))?;
-            // Settings::sync();
+                .map_err(|e| anyhow!("Unable to set screen reader enabled gsetting, {e}"))?;
         }
+        self.set_orca_enabled(enable).await?;
         if enable {
-            // Set orca enabled also
-            self.set_orca_enabled(true).await?;
             self.restart_orca().await?;
         } else {
-            // Set orca disabled also
-            self.set_orca_enabled(false).await?;
             self.stop_orca().await?;
         }
         self.enabled = enable;
