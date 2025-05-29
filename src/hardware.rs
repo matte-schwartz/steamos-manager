@@ -364,6 +364,48 @@ pub mod test {
             device_variant().await.unwrap(),
             (DeviceType::Unknown, String::from("unknown"))
         );
+
+        write(crate::path(SYS_VENDOR_PATH), "ZOTAC\n")
+            .await
+            .expect("write");
+        write(crate::path(BOARD_NAME_PATH), "INVALID\n")
+            .await
+            .expect("write");
+        write(crate::path(PRODUCT_NAME_PATH), "INVALID\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::Unknown, String::from("unknown"))
+        );
+
+        write(crate::path(BOARD_NAME_PATH), "G0A1W\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::ZotacGamingZone, String::from("G0A1W"))
+        );
+
+        write(crate::path(BOARD_NAME_PATH), "G1A1W\n")
+            .await
+            .expect("write");
+        assert_eq!(
+            steam_deck_variant().await.unwrap(),
+            SteamDeckVariant::Unknown
+        );
+        assert_eq!(
+            device_variant().await.unwrap(),
+            (DeviceType::ZotacGamingZone, String::from("G1A1W"))
+        );
     }
 
     #[test]
