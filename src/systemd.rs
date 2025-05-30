@@ -181,7 +181,7 @@ pub mod test {
     use std::collections::HashMap;
     use std::time::Duration;
     use tokio::time::sleep;
-    use zbus::fdo;
+    use zbus::{fdo, ObjectServer};
     use zbus::zvariant::ObjectPath;
 
     #[test]
@@ -232,6 +232,7 @@ pub mod test {
             let path = ObjectPath::try_from(format!("/restart/{mode}/{}", self.job))
                 .map_err(to_zbus_fdo_error)?;
             self.job += 1;
+            self.active = String::from("active");
             Ok(path.into())
         }
 
@@ -242,6 +243,7 @@ pub mod test {
             let path = ObjectPath::try_from(format!("/start/{mode}/{}", self.job))
                 .map_err(to_zbus_fdo_error)?;
             self.job += 1;
+            self.active = String::from("active");
             Ok(path.into())
         }
 
@@ -252,6 +254,7 @@ pub mod test {
             let path = ObjectPath::try_from(format!("/stop/{mode}/{}", self.job))
                 .map_err(to_zbus_fdo_error)?;
             self.job += 1;
+            self.active = String::from("inactive");
             Ok(path.into())
         }
     }
@@ -264,6 +267,7 @@ pub mod test {
             files: Vec<String>,
             _runtime: bool,
             _force: bool,
+            #[zbus(object_server)] object_server: &ObjectServer,
         ) -> fdo::Result<(bool, Vec<(String, String, String)>)> {
             let mut res = Vec::new();
             for file in files {
@@ -276,6 +280,14 @@ pub mod test {
                     self.states.insert(file.to_string(), EnableState::Enabled);
                     res.push((String::default(), String::default(), file.to_string()));
                 }
+                let path = PathBuf::from("/org/freedesktop/systemd1/unit").join(escape(&file));
+                let mock_unit = object_server
+                    .interface::<_, MockUnit>(path.to_string_lossy())
+                    .await;
+                if let Ok(mock_unit) = mock_unit {
+                    dbg!();
+                    mock_unit.get_mut().await.unit_file = String::from("enabled");
+                }
             }
             Ok((true, res))
         }
@@ -284,6 +296,7 @@ pub mod test {
             &mut self,
             files: Vec<String>,
             _runtime: bool,
+            #[zbus(object_server)] object_server: &ObjectServer,
         ) -> fdo::Result<Vec<(String, String, String)>> {
             let mut res = Vec::new();
             for file in files {
@@ -295,6 +308,13 @@ pub mod test {
                 } else {
                     self.states.insert(file.to_string(), EnableState::Disabled);
                     res.push((String::default(), String::default(), file.to_string()));
+                }
+                let path = PathBuf::from("/org/freedesktop/systemd1/unit").join(escape(&file));
+                let mock_unit = object_server
+                    .interface::<_, MockUnit>(path.to_string_lossy())
+                    .await;
+                if let Ok(mock_unit) = mock_unit {
+                    mock_unit.get_mut().await.unit_file = String::from("disabled");
                 }
             }
             Ok(res)
@@ -347,8 +367,8 @@ pub mod test {
     async fn test_unit() {
         let mut h = testing::start();
         let mut unit = MockUnit::default();
-        unit.active = String::from("active");
-        unit.unit_file = String::from("enabled");
+        unit.active = String::from("inactive");
+        unit.unit_file = String::from("disabled");
         let connection = h.new_dbus().await.expect("dbus");
         connection
             .request_name("org.freedesktop.systemd1")
@@ -363,17 +383,40 @@ pub mod test {
             .at("/org/freedesktop/systemd1", MockManager::default())
             .await
             .expect("at");
+        let mock_unit = object_server
+            .interface::<_, MockUnit>("/org/freedesktop/systemd1/unit/test_2eservice")
+            .await
+            .unwrap();
 
         sleep(Duration::from_millis(10)).await;
 
         let unit = SystemdUnit::new(connection.clone(), "test.service")
             .await
             .expect("unit");
-        assert!(unit.start().await.is_ok());
-        assert!(unit.restart().await.is_ok());
-        assert!(unit.stop().await.is_ok());
+        assert_eq!(unit.active().await.unwrap(), false);
 
+        assert!(unit.start().await.is_ok());
+        assert_eq!(mock_unit.get().await.active, "active");
+        assert_eq!(unit.active().await.unwrap(), true);
+
+        assert!(unit.restart().await.is_ok());
+        assert_eq!(mock_unit.get().await.active, "active");
+        assert_eq!(unit.active().await.unwrap(), true);
+
+        assert!(unit.stop().await.is_ok());
+        assert_eq!(mock_unit.get().await.active, "inactive");
+        assert_eq!(unit.active().await.unwrap(), false);
+
+        assert_eq!(mock_unit.get().await.unit_file, "disabled");
+        assert_eq!(unit.enabled().await.unwrap(), EnableState::Disabled);
+
+        assert!(unit.enable().await.unwrap());
+        assert_eq!(mock_unit.get().await.unit_file, "enabled");
         assert_eq!(unit.enabled().await.unwrap(), EnableState::Enabled);
+
+        assert!(unit.disable().await.unwrap());
+        assert_eq!(mock_unit.get().await.unit_file, "disabled");
+        assert_eq!(unit.enabled().await.unwrap(), EnableState::Disabled);
     }
 
     #[tokio::test]
