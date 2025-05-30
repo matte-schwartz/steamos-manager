@@ -31,6 +31,7 @@ use crate::power::{
     get_gpu_clocks, get_gpu_clocks_range, get_gpu_performance_level, get_gpu_power_profile,
     get_max_charge_level, get_platform_profile, tdp_limit_manager, TdpManagerCommand,
 };
+use crate::screenreader::OrcaManager;
 use crate::wifi::{
     get_wifi_backend, get_wifi_power_management_state, list_wifi_interfaces, WifiBackend,
 };
@@ -151,6 +152,10 @@ struct Manager2 {
 struct PerformanceProfile1 {
     proxy: Proxy<'static>,
     tdp_limit_manager: UnboundedSender<TdpManagerCommand>,
+}
+
+struct ScreenReader0 {
+    screen_reader: OrcaManager<'static>,
 }
 
 struct Storage1 {
@@ -618,6 +623,68 @@ impl PerformanceProfile1 {
     }
 }
 
+impl ScreenReader0 {
+    async fn new(connection: &Connection) -> Result<ScreenReader0> {
+        let screen_reader = OrcaManager::new(connection).await?;
+        Ok(ScreenReader0 { screen_reader })
+    }
+}
+
+#[interface(name = "com.steampowered.SteamOSManager1.ScreenReader0")]
+impl ScreenReader0 {
+    #[zbus(property)]
+    async fn enabled(&self) -> bool {
+        self.screen_reader.enabled()
+    }
+
+    #[zbus(property)]
+    async fn set_enabled(&mut self, enabled: bool) -> fdo::Result<()> {
+        self.screen_reader
+            .set_enabled(enabled)
+            .await
+            .map_err(to_zbus_fdo_error)
+    }
+
+    #[zbus(property)]
+    async fn rate(&self) -> f64 {
+        self.screen_reader.rate()
+    }
+
+    #[zbus(property)]
+    async fn set_rate(&mut self, rate: f64) -> fdo::Result<()> {
+        self.screen_reader
+            .set_rate(rate)
+            .await
+            .map_err(to_zbus_fdo_error)
+    }
+
+    #[zbus(property)]
+    async fn pitch(&self) -> f64 {
+        self.screen_reader.pitch()
+    }
+
+    #[zbus(property)]
+    async fn set_pitch(&mut self, pitch: f64) -> fdo::Result<()> {
+        self.screen_reader
+            .set_pitch(pitch)
+            .await
+            .map_err(to_zbus_fdo_error)
+    }
+
+    #[zbus(property)]
+    async fn volume(&self) -> f64 {
+        self.screen_reader.volume()
+    }
+
+    #[zbus(property)]
+    async fn set_volume(&mut self, volume: f64) -> fdo::Result<()> {
+        self.screen_reader
+            .set_volume(volume)
+            .await
+            .map_err(to_zbus_fdo_error)
+    }
+}
+
 #[interface(name = "com.steampowered.SteamOSManager1.Storage1")]
 impl Storage1 {
     async fn format_device(
@@ -919,6 +986,7 @@ pub(crate) async fn create_interfaces(
         proxy: proxy.clone(),
         channel: daemon,
     };
+    let screen_reader = ScreenReader0::new(&session).await?;
     let wifi_debug = WifiDebug1 {
         proxy: proxy.clone(),
     };
@@ -970,6 +1038,8 @@ pub(crate) async fn create_interfaces(
     }
 
     object_server.at(MANAGER_PATH, manager2).await?;
+
+    object_server.at(MANAGER_PATH, screen_reader).await?;
 
     if steam_deck_variant().await.unwrap_or_default() == SteamDeckVariant::Galileo {
         object_server.at(MANAGER_PATH, wifi_debug).await?;

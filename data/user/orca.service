@@ -1,0 +1,9 @@
+[Unit]
+Description=Orca Screen Reader
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/orca
+ExecReload=/usr/bin/orca --replace
+Restart=on-failure
+EnvironmentFile=%t/gamescope-environment

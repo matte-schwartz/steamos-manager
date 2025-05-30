@@ -8,7 +8,7 @@ test:
   tags:
     - x86_64-linux-kvm-docker
   script:
-    - pacman -Sy --noconfirm --needed dbus rust
+    - pacman -Sy --noconfirm --needed dbus rust gsettings-desktop-schemas
     - dbus-run-session cargo test
 
 workflow:
