@@ -181,8 +181,8 @@ pub mod test {
     use std::collections::HashMap;
     use std::time::Duration;
     use tokio::time::sleep;
-    use zbus::{fdo, ObjectServer};
     use zbus::zvariant::ObjectPath;
+    use zbus::{fdo, ObjectServer};
 
     #[test]
     fn enable_state_roundtrip() {
