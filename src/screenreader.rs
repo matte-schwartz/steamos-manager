@@ -22,6 +22,11 @@ use zbus::Connection;
 use crate::path;
 use crate::systemd::SystemdUnit;
 
+#[cfg(test)]
+const TEST_ORCA_SETTINGS: &str = "data/test-orca-settings.conf";
+#[cfg(test)]
+const ORCA_SETTINGS: &str = "orca-settings.conf";
+
 #[cfg(not(test))]
 const ORCA_SETTINGS: &str = "orca/user-settings.conf";
 const PITCH_SETTING: &str = "average-pitch";
@@ -81,7 +86,7 @@ impl<'dbus> OrcaManager<'dbus> {
 
     #[cfg(test)]
     fn settings_path(&self) -> Result<PathBuf> {
-        Ok(path("orca-settings.conf"))
+        Ok(path(ORCA_SETTINGS))
     }
 
     pub fn enabled(&self) -> bool {
@@ -289,21 +294,17 @@ impl<'dbus> OrcaManager<'dbus> {
 mod test {
     use super::*;
     use crate::testing;
-    use tokio::fs::copy;
+    use tokio::fs::{copy, remove_file};
 
     #[tokio::test]
     async fn test_enable_disable() {
         let mut h = testing::start();
-        copy(
-            "data/test-orca-settings.conf",
-            h.test.path().join("orca-settings.conf"),
-        )
-        .await
-        .unwrap();
-        let mut manager =
-            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
-                .await
-                .expect("OrcaManager::new");
+        copy(TEST_ORCA_SETTINGS, h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        let mut manager = OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+            .await
+            .expect("OrcaManager::new");
         let enable_result = manager.set_enabled(true).await;
         assert!(enable_result.is_ok());
         assert_eq!(manager.enabled(), true);
@@ -316,16 +317,12 @@ mod test {
     #[tokio::test]
     async fn test_pitch() {
         let mut h = testing::start();
-        copy(
-            "data/test-orca-settings.conf",
-            h.test.path().join("orca-settings.conf"),
-        )
-        .await
-        .unwrap();
-        let mut manager =
-            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
-                .await
-                .expect("OrcaManager::new");
+        copy(TEST_ORCA_SETTINGS, h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        let mut manager = OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+            .await
+            .expect("OrcaManager::new");
         let set_result = manager.set_pitch(5.0).await;
         assert!(set_result.is_ok());
         assert_eq!(manager.pitch(), 5.0);
@@ -337,21 +334,24 @@ mod test {
         let too_high_result = manager.set_pitch(12.0).await;
         assert!(too_high_result.is_err());
         assert_eq!(manager.pitch(), 5.0);
+
+        remove_file(h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        let nofile_result = manager.set_pitch(7.0).await;
+        assert_eq!(manager.pitch(), 5.0);
+        assert!(nofile_result.is_err());
     }
 
     #[tokio::test]
     async fn test_rate() {
         let mut h = testing::start();
-        copy(
-            "data/test-orca-settings.conf",
-            h.test.path().join("orca-settings.conf"),
-        )
-        .await
-        .unwrap();
-        let mut manager =
-            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
-                .await
-                .expect("OrcaManager::new");
+        copy(TEST_ORCA_SETTINGS, h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        let mut manager = OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+            .await
+            .expect("OrcaManager::new");
         let set_result = manager.set_rate(5.0).await;
         assert!(set_result.is_ok());
         assert_eq!(manager.rate(), 5.0);
@@ -363,21 +363,24 @@ mod test {
         let too_high_result = manager.set_rate(101.0).await;
         assert!(too_high_result.is_err());
         assert_eq!(manager.rate(), 5.0);
+
+        remove_file(h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        let nofile_result = manager.set_rate(7.0).await;
+        assert_eq!(manager.rate(), 5.0);
+        assert!(nofile_result.is_err());
     }
 
     #[tokio::test]
     async fn test_volume() {
         let mut h = testing::start();
-        copy(
-            "data/test-orca-settings.conf",
-            h.test.path().join("orca-settings.conf"),
-        )
-        .await
-        .unwrap();
-        let mut manager =
-            OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
-                .await
-                .expect("OrcaManager::new");
+        copy(TEST_ORCA_SETTINGS, h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        let mut manager = OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+            .await
+            .expect("OrcaManager::new");
         let set_result = manager.set_volume(5.0).await;
         assert!(set_result.is_ok());
         assert_eq!(manager.volume(), 5.0);
@@ -389,5 +392,12 @@ mod test {
         let too_high_result = manager.set_volume(12.0).await;
         assert!(too_high_result.is_err());
         assert_eq!(manager.volume(), 5.0);
+
+        remove_file(h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        let nofile_result = manager.set_volume(7.0).await;
+        assert_eq!(manager.volume(), 5.0);
+        assert!(nofile_result.is_err());
     }
 }
