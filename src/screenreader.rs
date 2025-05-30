@@ -267,51 +267,71 @@ impl<'dbus> OrcaManager<'dbus> {
         Ok(write(self.settings_path()?, data.as_bytes()).await?)
     }
 
-    #[cfg(not(test))]
     async fn restart_orca(&self) -> Result<()> {
         trace!("Restarting orca...");
+        self.orca_unit.enable().await?;
         self.orca_unit.restart().await
     }
 
-    #[cfg(test)]
-    async fn restart_orca(&self) -> Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(test))]
     async fn stop_orca(&self) -> Result<()> {
         trace!("Stopping orca...");
+        self.orca_unit.disable().await?;
         self.orca_unit.stop().await
-    }
-
-    #[cfg(test)]
-    async fn stop_orca(&self) -> Result<()> {
-        Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::systemd::test::{MockManager, MockUnit};
+    use crate::systemd::EnableState;
     use crate::testing;
+    use std::time::Duration;
     use tokio::fs::{copy, remove_file};
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_enable_disable() {
         let mut h = testing::start();
+        let mut unit = MockUnit::default();
+        unit.active = String::from("inactive");
+        unit.unit_file = String::from("disabled");
+        let connection = h.new_dbus().await.expect("dbus");
+        connection
+            .request_name("org.freedesktop.systemd1")
+            .await
+            .expect("request_name");
+        let object_server = connection.object_server();
+        object_server
+            .at("/org/freedesktop/systemd1/unit/orca_2eservice", unit)
+            .await
+            .expect("at");
+        object_server
+            .at("/org/freedesktop/systemd1", MockManager::default())
+            .await
+            .expect("at");
+
+        sleep(Duration::from_millis(10)).await;
+
+        let unit = SystemdUnit::new(connection.clone(), "orca.service")
+            .await
+            .expect("unit");
         copy(TEST_ORCA_SETTINGS, h.test.path().join(ORCA_SETTINGS))
             .await
             .unwrap();
-        let mut manager = OrcaManager::new(&h.new_dbus().await.expect("new_dbus"))
+
+        let mut manager = OrcaManager::new(&connection)
             .await
             .expect("OrcaManager::new");
-        let enable_result = manager.set_enabled(true).await;
-        assert!(enable_result.is_ok());
+        manager.set_enabled(true).await.unwrap();
         assert_eq!(manager.enabled(), true);
+        assert_eq!(unit.active().await.unwrap(), true);
+        assert_eq!(unit.enabled().await.unwrap(), EnableState::Enabled);
 
-        let disable_result = manager.set_enabled(false).await;
-        assert!(disable_result.is_ok());
+        manager.set_enabled(false).await.unwrap();
         assert_eq!(manager.enabled(), false);
+        assert_eq!(unit.active().await.unwrap(), false);
+        assert_eq!(unit.enabled().await.unwrap(), EnableState::Disabled);
     }
 
     #[tokio::test]
