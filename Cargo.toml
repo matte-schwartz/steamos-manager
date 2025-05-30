@@ -1,7 +1,8 @@
 [package]
 name = "steamos-manager"
-version = "25.5.2"
+version = "25.5.4"
 edition = "2021"
+repository = "https://gitlab.steamos.cloud/holo/steamos-manager/"
 
 [profile.release]
 strip="symbols"
