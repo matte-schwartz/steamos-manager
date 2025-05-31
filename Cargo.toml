@@ -1,6 +1,6 @@
 [package]
 name = "steamos-manager"
-version = "25.5.4"
+version = "25.5.5"
 edition = "2021"
 repository = "https://gitlab.steamos.cloud/holo/steamos-manager/"
 
