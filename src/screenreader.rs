@@ -10,6 +10,7 @@ use gio::{prelude::SettingsExt, Settings};
 use lazy_static::lazy_static;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use tokio::fs::{read_to_string, write};
@@ -105,7 +106,12 @@ impl<'dbus> OrcaManager<'dbus> {
                 .set_boolean(SCREEN_READER_SETTING, enable)
                 .map_err(|e| anyhow!("Unable to set screen reader enabled gsetting, {e}"))?;
         }
-        self.set_orca_enabled(enable).await?;
+        if let Err(e) = self.set_orca_enabled(enable).await {
+            match e.downcast_ref::<std::io::Error>() {
+                Some(e) if e.kind() == ErrorKind::NotFound => (),
+                _ => return Err(e),
+            }
+        }
         if enable {
             self.restart_orca().await?;
         } else {
@@ -316,13 +322,25 @@ mod test {
         let unit = SystemdUnit::new(connection.clone(), "orca.service")
             .await
             .expect("unit");
-        copy(TEST_ORCA_SETTINGS, h.test.path().join(ORCA_SETTINGS))
-            .await
-            .unwrap();
 
         let mut manager = OrcaManager::new(&connection)
             .await
             .expect("OrcaManager::new");
+        manager.set_enabled(true).await.unwrap();
+        assert_eq!(manager.enabled(), true);
+        assert_eq!(unit.active().await.unwrap(), true);
+        assert_eq!(unit.enabled().await.unwrap(), EnableState::Enabled);
+
+        manager.set_enabled(false).await.unwrap();
+        assert_eq!(manager.enabled(), false);
+        assert_eq!(unit.active().await.unwrap(), false);
+        assert_eq!(unit.enabled().await.unwrap(), EnableState::Disabled);
+
+        copy(TEST_ORCA_SETTINGS, h.test.path().join(ORCA_SETTINGS))
+            .await
+            .unwrap();
+        manager.load_values().await.unwrap();
+
         manager.set_enabled(true).await.unwrap();
         assert_eq!(manager.enabled(), true);
         assert_eq!(unit.active().await.unwrap(), true);
