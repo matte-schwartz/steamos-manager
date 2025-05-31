@@ -115,7 +115,6 @@ impl<'dbus> SystemdUnit<'dbus> {
         Ok(())
     }
 
-    #[allow(unused)]
     pub async fn enable(&self) -> Result<bool> {
         let manager = SystemdManagerProxy::new(&self.connection).await?;
         let (_, res) = manager
@@ -124,7 +123,6 @@ impl<'dbus> SystemdUnit<'dbus> {
         Ok(!res.is_empty())
     }
 
-    #[allow(unused)]
     pub async fn disable(&self) -> Result<bool> {
         let manager = SystemdManagerProxy::new(&self.connection).await?;
         let res = manager
