@@ -11,7 +11,7 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{unbounded_channel, Sender};
-use tracing::error;
+use tracing::{error, info};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, Registry};
 #[cfg(not(test))]
@@ -109,7 +109,12 @@ pub(crate) type Command = DaemonCommand<()>;
 
 async fn create_connections(
     channel: Sender<Command>,
-) -> Result<(Connection, Connection, JobManagerService, TdpManagerService)> {
+) -> Result<(
+    Connection,
+    Connection,
+    JobManagerService,
+    Result<TdpManagerService>,
+)> {
     let system = Connection::system().await?;
     let connection = Builder::session()?
         .name("com.steampowered.SteamOSManager1")?
@@ -121,7 +126,7 @@ async fn create_connections(
     let jm_service = JobManagerService::new(job_manager, rx, system.clone());
 
     let (tdp_tx, rx) = unbounded_channel();
-    let tdp_service = TdpManagerService::new(rx, &system, &connection).await?;
+    let tdp_service = TdpManagerService::new(rx, &system, &connection).await;
 
     create_interfaces(connection.clone(), system.clone(), channel, jm_tx, tdp_tx).await?;
 
@@ -151,7 +156,11 @@ pub async fn daemon() -> Result<()> {
     let mut daemon = Daemon::new(subscriber, system, rx).await?;
 
     daemon.add_service(mirror_service);
-    daemon.add_service(tdp_service);
+    if let Ok(tdp_service) = tdp_service {
+        daemon.add_service(tdp_service);
+    } else if let Err(e) = tdp_service {
+        info!("TdpManagerService not available: {e}");
+    }
 
     session.object_server().at("/", ObjectManager {}).await?;
 
