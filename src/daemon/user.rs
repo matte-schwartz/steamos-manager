@@ -11,7 +11,7 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{unbounded_channel, Sender};
-use tracing::error;
+use tracing::{error, info};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, Registry};
 #[cfg(not(test))]
@@ -158,6 +158,8 @@ pub async fn daemon() -> Result<()> {
     daemon.add_service(mirror_service);
     if let Ok(tdp_service) = tdp_service {
         daemon.add_service(tdp_service);
+    } else if let Err(e) = tdp_service {
+        info!("TdpManagerService not available: {e}");
     }
 
     session.object_server().at("/", ObjectManager {}).await?;
