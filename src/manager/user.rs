@@ -31,7 +31,7 @@ use crate::power::{
     get_gpu_clocks, get_gpu_clocks_range, get_gpu_performance_level, get_gpu_power_profile,
     get_max_charge_level, get_platform_profile, TdpManagerCommand,
 };
-use crate::screenreader::OrcaManager;
+use crate::screenreader::{OrcaManager, ScreenReaderMode};
 use crate::wifi::{
     get_wifi_backend, get_wifi_power_management_state, list_wifi_interfaces, WifiBackend,
 };
@@ -684,6 +684,28 @@ impl ScreenReader0 {
             .set_volume(volume)
             .await
             .map_err(to_zbus_fdo_error)
+    }
+
+    #[zbus(property)]
+    async fn mode(&self) -> u32 {
+        self.screen_reader.mode() as u32
+    }
+
+    #[zbus(property)]
+    async fn set_mode(
+        &mut self,
+        m: u32,
+        #[zbus(signal_emitter)] ctx: SignalEmitter<'_>,
+    ) -> fdo::Result<()> {
+        let mode = match ScreenReaderMode::try_from(m) {
+            Ok(mode) => mode,
+            Err(err) => return Err(fdo::Error::InvalidArgs(err.to_string())),
+        };
+        self.screen_reader
+            .set_mode(mode)
+            .await
+            .map_err(to_zbus_fdo_error)?;
+        self.mode_changed(&ctx).await.map_err(to_zbus_fdo_error)
     }
 }
 

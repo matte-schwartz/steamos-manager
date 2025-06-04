@@ -25,7 +25,6 @@ mod job;
 mod manager;
 mod platform;
 mod process;
-mod screenreader;
 mod sls;
 mod systemd;
 mod udev;
@@ -35,6 +34,7 @@ pub mod daemon;
 pub mod hardware;
 pub mod power;
 pub mod proxy;
+pub mod screenreader;
 pub mod wifi;
 
 #[cfg(test)]

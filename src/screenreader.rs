@@ -7,12 +7,28 @@
 
 use anyhow::{anyhow, bail, ensure, Result};
 use gio::{prelude::SettingsExt, Settings};
+#[cfg(test)]
+use input_linux::InputEvent;
+#[cfg(not(test))]
+use input_linux::{EventKind, InputId, UInputHandle};
+use input_linux::{EventTime, Key, KeyEvent, KeyState, SynchronizeEvent};
 use lazy_static::lazy_static;
+#[cfg(not(test))]
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
+use num_enum::TryFromPrimitive;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(not(test))]
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::ops::RangeInclusive;
+#[cfg(not(test))]
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
+use std::time::SystemTime;
+use strum::{Display, EnumString};
 use tokio::fs::{read_to_string, write};
 use tracing::{debug, error, info, trace, warn};
 #[cfg(not(test))]
@@ -37,6 +53,7 @@ const ENABLE_SETTING: &str = "enableSpeech";
 
 const A11Y_SETTING: &str = "org.gnome.desktop.a11y.applications";
 const SCREEN_READER_SETTING: &str = "screen-reader-enabled";
+const KEYBOARD_NAME: &str = "steamos-manager";
 
 const PITCH_DEFAULT: f64 = 5.0;
 const RATE_DEFAULT: f64 = 50.0;
@@ -50,12 +67,125 @@ lazy_static! {
     ]);
 }
 
+#[derive(Display, EnumString, PartialEq, Debug, Copy, Clone, TryFromPrimitive)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+#[repr(u32)]
+pub enum ScreenReaderMode {
+    Browse = 0,
+    Focus = 1,
+}
+
+pub(crate) struct UInputDevice {
+    #[cfg(not(test))]
+    handle: UInputHandle<OwnedFd>,
+    #[cfg(test)]
+    queue: VecDeque<InputEvent>,
+    name: String,
+    open: bool,
+}
+
+impl UInputDevice {
+    #[cfg(not(test))]
+    pub(crate) fn new() -> Result<UInputDevice> {
+        let fd = OpenOptions::new()
+            .write(true)
+            .create(false)
+            .open("/dev/uinput")?
+            .into();
+
+        let mut flags = OFlag::from_bits_retain(fcntl(&fd, FcntlArg::F_GETFL)?);
+        flags.set(OFlag::O_NONBLOCK, true);
+        fcntl(&fd, FcntlArg::F_SETFL(flags))?;
+
+        Ok(UInputDevice {
+            handle: UInputHandle::new(fd),
+            name: String::new(),
+            open: false,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new() -> Result<UInputDevice> {
+        Ok(UInputDevice {
+            queue: VecDeque::new(),
+            name: String::new(),
+            open: false,
+        })
+    }
+
+    pub(crate) fn set_name(&mut self, name: String) -> Result<()> {
+        ensure!(!self.open, "Cannot change name after opening");
+        self.name = name;
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    pub(crate) fn open(&mut self) -> Result<()> {
+        ensure!(!self.open, "Cannot reopen uinput handle");
+
+        self.handle.set_evbit(EventKind::Key)?;
+        self.handle.set_keybit(Key::Insert)?;
+        self.handle.set_keybit(Key::A)?;
+
+        let input_id = InputId {
+            bustype: input_linux::sys::BUS_VIRTUAL,
+            vendor: 0x28DE,
+            product: 0,
+            version: 0,
+        };
+        self.handle
+            .create(&input_id, self.name.as_bytes(), 0, &[])?;
+        self.open = true;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open(&mut self) -> Result<()> {
+        ensure!(!self.open, "Cannot reopen uinput handle");
+        self.open = true;
+        Ok(())
+    }
+
+    fn system_time() -> Result<EventTime> {
+        let duration = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
+        Ok(EventTime::new(
+            duration.as_secs().try_into()?,
+            duration.subsec_micros().into(),
+        ))
+    }
+
+    fn send_key_event(&mut self, key: Key, value: KeyState) -> Result<()> {
+        let tv = UInputDevice::system_time().unwrap_or_else(|err| {
+            warn!("System time error: {err}");
+            EventTime::default()
+        });
+
+        let ev = KeyEvent::new(tv, key, value);
+        let syn = SynchronizeEvent::report(tv);
+        #[cfg(not(test))]
+        self.handle.write(&[*ev.as_ref(), *syn.as_ref()])?;
+        #[cfg(test)]
+        self.queue.extend(&[*ev.as_ref(), *syn.as_ref()]);
+        Ok(())
+    }
+
+    pub(crate) fn key_down(&mut self, key: Key) -> Result<()> {
+        self.send_key_event(key, KeyState::PRESSED)
+    }
+
+    pub(crate) fn key_up(&mut self, key: Key) -> Result<()> {
+        self.send_key_event(key, KeyState::RELEASED)
+    }
+}
+
 pub(crate) struct OrcaManager<'dbus> {
     orca_unit: SystemdUnit<'dbus>,
     rate: f64,
     pitch: f64,
     volume: f64,
     enabled: bool,
+    mode: ScreenReaderMode,
+    keyboard: UInputDevice,
 }
 
 impl<'dbus> OrcaManager<'dbus> {
@@ -66,6 +196,9 @@ impl<'dbus> OrcaManager<'dbus> {
             pitch: PITCH_DEFAULT,
             volume: VOLUME_DEFAULT,
             enabled: true,
+            // Always start in browse mode for now, since we have no storage to remember this property
+            mode: ScreenReaderMode::Browse,
+            keyboard: UInputDevice::new()?,
         };
         let _ = manager
             .load_values()
@@ -73,6 +206,9 @@ impl<'dbus> OrcaManager<'dbus> {
             .inspect_err(|e| warn!("Failed to load orca configuration: {e}"));
         let a11ysettings = Settings::new(A11Y_SETTING);
         manager.enabled = a11ysettings.boolean(SCREEN_READER_SETTING);
+        manager.keyboard.set_name(KEYBOARD_NAME.to_string())?;
+        manager.keyboard.open()?;
+
         Ok(manager)
     }
 
@@ -154,6 +290,38 @@ impl<'dbus> OrcaManager<'dbus> {
 
         self.set_orca_option(VOLUME_SETTING, volume).await?;
         self.volume = volume;
+        Ok(())
+    }
+
+    pub fn mode(&self) -> ScreenReaderMode {
+        self.mode
+    }
+
+    pub async fn set_mode(&mut self, mode: ScreenReaderMode) -> Result<()> {
+        // Use insert+A twice to switch to focus mode sticky
+        // Use insert+A three times to switch to browse mode sticky
+        match mode {
+            ScreenReaderMode::Focus => {
+                self.keyboard.key_down(Key::Insert)?;
+                self.keyboard.key_down(Key::A)?;
+                self.keyboard.key_up(Key::A)?;
+                self.keyboard.key_down(Key::A)?;
+                self.keyboard.key_up(Key::A)?;
+                self.keyboard.key_up(Key::Insert)?;
+            }
+            ScreenReaderMode::Browse => {
+                self.keyboard.key_down(Key::Insert)?;
+                self.keyboard.key_down(Key::A)?;
+                self.keyboard.key_up(Key::A)?;
+                self.keyboard.key_down(Key::A)?;
+                self.keyboard.key_up(Key::A)?;
+                self.keyboard.key_down(Key::A)?;
+                self.keyboard.key_up(Key::A)?;
+                self.keyboard.key_up(Key::Insert)?;
+            }
+        }
+        self.mode = mode;
+
         Ok(())
     }
 

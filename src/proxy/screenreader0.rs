@@ -42,4 +42,10 @@ pub trait ScreenReader0 {
     fn volume(&self) -> zbus::Result<f64>;
     #[zbus(property)]
     fn set_volume(&self, value: f64) -> zbus::Result<()>;
+
+    /// Mode property
+    #[zbus(property)]
+    fn mode(&self) -> zbus::Result<u32>;
+    #[zbus(property)]
+    fn set_mode(&self, mode: u32) -> zbus::Result<()>;
 }
