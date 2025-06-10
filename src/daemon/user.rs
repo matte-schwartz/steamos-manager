@@ -127,6 +127,11 @@ async fn create_connections(
 
     let (tdp_tx, rx) = unbounded_channel();
     let tdp_service = TdpManagerService::new(rx, &system, &connection).await;
+    let tdp_tx = if tdp_service.is_ok() {
+        Some(tdp_tx)
+    } else {
+        None
+    };
 
     create_interfaces(connection.clone(), system.clone(), channel, jm_tx, tdp_tx).await?;
 

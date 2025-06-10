@@ -29,7 +29,7 @@ use crate::power::{
     get_available_cpu_scaling_governors, get_available_gpu_performance_levels,
     get_available_gpu_power_profiles, get_available_platform_profiles, get_cpu_scaling_governor,
     get_gpu_clocks, get_gpu_clocks_range, get_gpu_performance_level, get_gpu_power_profile,
-    get_max_charge_level, get_platform_profile, tdp_limit_manager, TdpManagerCommand,
+    get_max_charge_level, get_platform_profile, TdpManagerCommand,
 };
 use crate::screenreader::OrcaManager;
 use crate::wifi::{
@@ -151,7 +151,7 @@ struct Manager2 {
 
 struct PerformanceProfile1 {
     proxy: Proxy<'static>,
-    tdp_limit_manager: UnboundedSender<TdpManagerCommand>,
+    tdp_limit_manager: Option<UnboundedSender<TdpManagerCommand>>,
 }
 
 struct ScreenReader0 {
@@ -588,25 +588,27 @@ impl PerformanceProfile1 {
         let _: () = self.proxy.call("SetPerformanceProfile", &(profile)).await?;
         self.performance_profile_changed(&ctx).await?;
         let connection = connection.clone();
-        let manager = self.tdp_limit_manager.clone();
-        let _ = manager.send(TdpManagerCommand::UpdateDownloadMode);
-        tokio::spawn(async move {
-            let (tx, rx) = oneshot::channel();
-            manager.send(TdpManagerCommand::IsActive(tx))?;
-            if rx.await?? {
-                let tdp_limit = TdpLimit1 { manager };
-                connection
-                    .object_server()
-                    .at(MANAGER_PATH, tdp_limit)
-                    .await?;
-            } else {
-                connection
-                    .object_server()
-                    .remove::<TdpLimit1, _>(MANAGER_PATH)
-                    .await?;
-            }
-            Ok::<(), Error>(())
-        });
+        if let Some(manager) = self.tdp_limit_manager.as_ref() {
+            let manager = manager.clone();
+            let _ = manager.send(TdpManagerCommand::UpdateDownloadMode);
+            tokio::spawn(async move {
+                let (tx, rx) = oneshot::channel();
+                manager.send(TdpManagerCommand::IsActive(tx))?;
+                if rx.await?? {
+                    let tdp_limit = TdpLimit1 { manager };
+                    connection
+                        .object_server()
+                        .at(MANAGER_PATH, tdp_limit)
+                        .await?;
+                } else {
+                    connection
+                        .object_server()
+                        .remove::<TdpLimit1, _>(MANAGER_PATH)
+                        .await?;
+                }
+                Ok::<(), Error>(())
+            });
+        }
         Ok(())
     }
 
@@ -854,7 +856,7 @@ async fn create_config_interfaces(
     proxy: &Proxy<'static>,
     object_server: &ObjectServer,
     job_manager: &UnboundedSender<JobManagerCommand>,
-    tdp_manager: &UnboundedSender<TdpManagerCommand>,
+    tdp_manager: Option<UnboundedSender<TdpManagerCommand>>,
 ) -> Result<()> {
     let Some(config) = platform_config().await? else {
         return Ok(());
@@ -891,9 +893,9 @@ async fn create_config_interfaces(
         object_server.at(MANAGER_PATH, fan_control).await?;
     }
 
-    if let Ok(manager) = tdp_limit_manager().await {
+    if let Some(manager) = tdp_manager {
         let low_power_mode = LowPowerMode1 {
-            manager: tdp_manager.clone(),
+            manager: manager.clone(),
         };
         if config
             .tdp_limit
@@ -903,12 +905,17 @@ async fn create_config_interfaces(
         {
             object_server.at(MANAGER_PATH, low_power_mode).await?;
         }
-        if manager.is_active().await? {
-            let tdp_limit = TdpLimit1 {
-                manager: tdp_manager.clone(),
-            };
-            object_server.at(MANAGER_PATH, tdp_limit).await?;
-        }
+
+        let object_server = object_server.clone();
+        tokio::spawn(async move {
+            let (tx, rx) = oneshot::channel();
+            manager.send(TdpManagerCommand::IsActive(tx))?;
+            if rx.await?? {
+                let tdp_limit = TdpLimit1 { manager };
+                object_server.at(MANAGER_PATH, tdp_limit).await?;
+            }
+            Ok::<(), Error>(())
+        });
     }
 
     if let Some(ref config) = config.performance_profile {
@@ -954,7 +961,7 @@ pub(crate) async fn create_interfaces(
     system: Connection,
     daemon: Sender<Command>,
     job_manager: UnboundedSender<JobManagerCommand>,
-    tdp_manager: UnboundedSender<TdpManagerCommand>,
+    tdp_manager: Option<UnboundedSender<TdpManagerCommand>>,
 ) -> Result<()> {
     let proxy = Builder::<Proxy>::new(&system)
         .destination("com.steampowered.SteamOSManager1")?
@@ -1000,7 +1007,7 @@ pub(crate) async fn create_interfaces(
     let object_server = session.object_server();
     object_server.at(MANAGER_PATH, manager).await?;
 
-    create_config_interfaces(&proxy, object_server, &job_manager, &tdp_manager).await?;
+    create_config_interfaces(&proxy, object_server, &job_manager, tdp_manager).await?;
 
     if device_type().await.unwrap_or_default() == DeviceType::SteamDeck {
         object_server.at(MANAGER_PATH, als).await?;
@@ -1073,7 +1080,7 @@ mod test {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
     use tokio::fs::{set_permissions, write};
-    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
     use tokio::time::sleep;
     use zbus::object_server::Interface;
     use zbus::Connection;
@@ -1081,6 +1088,8 @@ mod test {
     struct TestHandle {
         _handle: testing::TestHandle,
         connection: Connection,
+        _rx_job: UnboundedReceiver<JobManagerCommand>,
+        rx_tdp: Option<UnboundedReceiver<TdpManagerCommand>>,
     }
 
     fn all_config() -> Option<PlatformConfig> {
@@ -1114,8 +1123,19 @@ mod test {
     async fn start(mut platform_config: Option<PlatformConfig>) -> Result<TestHandle> {
         let mut handle = testing::start();
         let (tx_ctx, _rx_ctx) = channel::<UserContext>();
-        let (tx_job, _rx_job) = unbounded_channel::<JobManagerCommand>();
-        let (tx_tdp, _rx_tdp) = unbounded_channel::<TdpManagerCommand>();
+        let (tx_job, rx_job) = unbounded_channel::<JobManagerCommand>();
+        let (tx_tdp, rx_tdp) = {
+            if platform_config
+                .as_ref()
+                .and_then(|config| config.tdp_limit.as_ref())
+                .is_some()
+            {
+                let (tx_tdp, rx_tdp) = unbounded_channel::<TdpManagerCommand>();
+                (Some(tx_tdp), Some(rx_tdp))
+            } else {
+                (None, None)
+            }
+        };
 
         if let Some(ref mut config) = platform_config {
             config.set_test_paths();
@@ -1165,6 +1185,8 @@ mod test {
         Ok(TestHandle {
             _handle: handle,
             connection,
+            _rx_job: rx_job,
+            rx_tdp,
         })
     }
 
@@ -1289,7 +1311,15 @@ mod test {
 
     #[tokio::test]
     async fn interface_matches_tdp_limit1() {
-        let test = start(all_config()).await.expect("start");
+        let mut test = start(all_config()).await.expect("start");
+
+        let TdpManagerCommand::IsActive(reply) =
+            test.rx_tdp.as_mut().unwrap().recv().await.unwrap()
+        else {
+            panic!();
+        };
+        reply.send(Ok(true)).unwrap();
+        sleep(Duration::from_millis(1)).await;
 
         assert!(test_interface_matches::<TdpLimit1>(&test.connection)
             .await
@@ -1299,6 +1329,21 @@ mod test {
     #[tokio::test]
     async fn interface_missing_tdp_limit1() {
         let test = start(None).await.expect("start");
+
+        assert!(test_interface_missing::<TdpLimit1>(&test.connection).await);
+    }
+
+    #[tokio::test]
+    async fn interface_inactive_tdp_limit1() {
+        let mut test = start(all_config()).await.expect("start");
+
+        let TdpManagerCommand::IsActive(reply) =
+            test.rx_tdp.as_mut().unwrap().recv().await.unwrap()
+        else {
+            panic!();
+        };
+        reply.send(Ok(false)).unwrap();
+        sleep(Duration::from_millis(1)).await;
 
         assert!(test_interface_missing::<TdpLimit1>(&test.connection).await);
     }
