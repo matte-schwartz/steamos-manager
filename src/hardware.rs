@@ -483,19 +483,11 @@ pub mod test {
 
         sleep(Duration::from_millis(10)).await;
 
-        h.test.platform_config.replace(Some(PlatformConfig {
-            factory_reset: None,
-            update_bios: None,
-            update_dock: None,
-            storage: None,
-            fan_control: Some(ServiceConfig::Systemd(String::from(
-                "jupiter-fan-control.service",
-            ))),
-            tdp_limit: None,
-            gpu_clocks: None,
-            battery_charge_limit: None,
-            performance_profile: None,
-        }));
+        let mut platform_config = PlatformConfig::default();
+        platform_config.fan_control = Some(ServiceConfig::Systemd(String::from(
+            "jupiter-fan-control.service",
+        )));
+        h.test.platform_config.replace(Some(platform_config));
 
         let fan_control = FanControl::new(connection);
         assert_eq!(

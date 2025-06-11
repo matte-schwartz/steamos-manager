@@ -11,7 +11,7 @@ use std::str::FromStr;
 use strum::{Display, EnumString};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
-use zbus::Connection;
+use zbus::{self, Connection};
 
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Unit",
@@ -19,13 +19,13 @@ use zbus::Connection;
 )]
 trait SystemdUnit {
     #[zbus(property)]
-    fn active_state(&self) -> Result<String>;
+    fn active_state(&self) -> zbus::Result<String>;
     #[zbus(property)]
-    fn unit_file_state(&self) -> Result<String>;
+    fn unit_file_state(&self) -> zbus::Result<String>;
 
-    async fn restart(&self, mode: &str) -> Result<OwnedObjectPath>;
-    async fn start(&self, mode: &str) -> Result<OwnedObjectPath>;
-    async fn stop(&self, mode: &str) -> Result<OwnedObjectPath>;
+    async fn restart(&self, mode: &str) -> zbus::Result<OwnedObjectPath>;
+    async fn start(&self, mode: &str) -> zbus::Result<OwnedObjectPath>;
+    async fn stop(&self, mode: &str) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[zbus::proxy(
@@ -40,28 +40,30 @@ trait SystemdManager {
         files: &[&str],
         runtime: bool,
         force: bool,
-    ) -> Result<(bool, Vec<(String, String, String)>)>;
+    ) -> zbus::Result<(bool, Vec<(String, String, String)>)>;
 
     async fn disable_unit_files(
         &self,
         files: &[&str],
         runtime: bool,
-    ) -> Result<Vec<(String, String, String)>>;
+    ) -> zbus::Result<Vec<(String, String, String)>>;
 
     async fn mask_unit_files(
         &self,
         files: &[&str],
         runtime: bool,
         force: bool,
-    ) -> Result<Vec<(String, String, String)>>;
+    ) -> zbus::Result<Vec<(String, String, String)>>;
 
     async fn unmask_unit_files(
         &self,
         files: &[&str],
         runtime: bool,
-    ) -> Result<Vec<(String, String, String)>>;
+    ) -> zbus::Result<Vec<(String, String, String)>>;
 
-    async fn reload(&self) -> Result<()>;
+    async fn reload(&self) -> zbus::Result<()>;
+
+    async fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone)]
@@ -86,6 +88,17 @@ pub async fn daemon_reload(connection: &Connection) -> Result<()> {
 }
 
 impl<'dbus> SystemdUnit<'dbus> {
+    pub async fn exists(connection: &Connection, name: &str) -> Result<bool> {
+        let manager = SystemdManagerProxy::new(connection).await?;
+        // This is kinda hacky, but zbus makes it pretty hard to get the proper error name
+        let expected_error = format!("Unit {name} not loaded.");
+        match manager.get_unit(name).await {
+            Ok(_) => Ok(true),
+            Err(zbus::Error::Failure(message)) if message == expected_error => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub async fn new(connection: Connection, name: &str) -> Result<SystemdUnit<'dbus>> {
         let path = PathBuf::from("/org/freedesktop/systemd1/unit").join(escape(name));
         let path = String::from(path.to_str().ok_or(anyhow!("Unit name {name} invalid"))?);
@@ -283,7 +296,6 @@ pub mod test {
                     .interface::<_, MockUnit>(path.to_string_lossy())
                     .await;
                 if let Ok(mock_unit) = mock_unit {
-                    dbg!();
                     mock_unit.get_mut().await.unit_file = String::from("enabled");
                 }
             }
@@ -358,6 +370,14 @@ pub mod test {
 
         async fn reload(&self) -> fdo::Result<()> {
             Ok(())
+        }
+
+        async fn get_unit(&mut self, unit: &str) -> fdo::Result<OwnedObjectPath> {
+            Ok(
+                ObjectPath::try_from(format!("/org/freedesktop/systemd1/unit/{}", escape(unit)))
+                    .unwrap()
+                    .into(),
+            )
         }
     }
 

@@ -19,13 +19,19 @@ use tokio::fs::{metadata, read_to_string};
 #[cfg(not(test))]
 use tokio::sync::OnceCell;
 use tokio::task::spawn_blocking;
+use zbus::Connection;
 
 #[cfg(not(test))]
 use crate::hardware::{device_type, DeviceType};
+#[cfg(test)]
+use crate::path;
 use crate::power::TdpLimitingMethod;
+use crate::systemd::SystemdUnit;
 
 #[cfg(not(test))]
-static CONFIG: OnceCell<Option<PlatformConfig>> = OnceCell::const_new();
+static PLATFORM_CONFIG: OnceCell<Option<PlatformConfig>> = OnceCell::const_new();
+#[cfg(not(test))]
+static DEVICE_CONFIG: OnceCell<Option<DeviceConfig>> = OnceCell::const_new();
 
 #[derive(Clone, Default, Deserialize, Debug)]
 #[serde(default)]
@@ -35,6 +41,11 @@ pub(crate) struct PlatformConfig {
     pub update_dock: Option<ScriptConfig>,
     pub storage: Option<StorageConfig>,
     pub fan_control: Option<ServiceConfig>,
+}
+
+#[derive(Clone, Default, Deserialize, Debug)]
+#[serde(default)]
+pub(crate) struct DeviceConfig {
     pub tdp_limit: Option<TdpLimitConfig>,
     pub gpu_clocks: Option<RangeConfig<u32>>,
     pub battery_charge_limit: Option<BatteryChargeLimitConfig>,
@@ -93,6 +104,14 @@ pub(crate) struct ResetConfig {
     pub user: ScriptConfig,
 }
 
+impl ResetConfig {
+    pub(crate) async fn is_valid(&self, root: bool) -> Result<bool> {
+        Ok(self.all.is_valid(root).await?
+            && self.os.is_valid(root).await?
+            && self.user.is_valid(root).await?)
+    }
+}
+
 #[derive(Clone, Deserialize, Debug)]
 pub(crate) enum ServiceConfig {
     #[serde(rename = "systemd")]
@@ -105,10 +124,31 @@ pub(crate) enum ServiceConfig {
     },
 }
 
+impl ServiceConfig {
+    pub(crate) async fn is_valid(&self, connection: &Connection, root: bool) -> Result<bool> {
+        match self {
+            ServiceConfig::Systemd(unit) => SystemdUnit::exists(connection, unit).await,
+            ServiceConfig::Script {
+                start,
+                stop,
+                status,
+            } => Ok(start.is_valid(root).await?
+                && stop.is_valid(root).await?
+                && status.is_valid(root).await?),
+        }
+    }
+}
+
 #[derive(Clone, Default, Deserialize, Debug)]
 pub(crate) struct StorageConfig {
     pub trim_devices: ScriptConfig,
     pub format_device: FormatDeviceConfig,
+}
+
+impl StorageConfig {
+    pub(crate) async fn is_valid(&self, root: bool) -> Result<bool> {
+        Ok(self.trim_devices.is_valid(root).await? && self.format_device.is_valid(root).await?)
+    }
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -153,6 +193,36 @@ pub(crate) struct FormatDeviceConfig {
     pub no_validate_flag: Option<String>,
 }
 
+impl FormatDeviceConfig {
+    pub(crate) async fn is_valid(&self, root: bool) -> Result<bool> {
+        let meta = match metadata(&self.script).await {
+            Ok(meta) => meta,
+            Err(e) if [ErrorKind::NotFound, ErrorKind::PermissionDenied].contains(&e.kind()) => {
+                return Ok(false)
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if !meta.is_file() {
+            return Ok(false);
+        }
+        if root {
+            let script = self.script.clone();
+            if !spawn_blocking(move || match access(&script, AccessFlags::X_OK) {
+                Ok(()) => Ok(true),
+                Err(Errno::ENOENT | Errno::EACCES) => Ok(false),
+                Err(e) => Err(e),
+            })
+            .await??
+            {
+                return Ok(false);
+            }
+        } else if (meta.mode() & 0o111) == 0 {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+}
+
 impl<T: Clone> RangeConfig<T> {
     #[allow(unused)]
     pub(crate) fn new(min: T, max: T) -> RangeConfig<T> {
@@ -163,6 +233,47 @@ impl<T: Clone> RangeConfig<T> {
 impl PlatformConfig {
     #[cfg(not(test))]
     async fn load() -> Result<Option<PlatformConfig>> {
+        let config = read_to_string("/usr/share/steamos-manager/platform.toml").await?;
+        Ok(Some(toml::from_str(config.as_ref())?))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_paths(&mut self) {
+        if let Some(ref mut factory_reset) = self.factory_reset {
+            if factory_reset.all.script.as_os_str().is_empty() {
+                factory_reset.all.script = path("exe");
+            }
+            if factory_reset.os.script.as_os_str().is_empty() {
+                factory_reset.os.script = path("exe");
+            }
+            if factory_reset.user.script.as_os_str().is_empty() {
+                factory_reset.user.script = path("exe");
+            }
+        }
+        if let Some(ref mut storage) = self.storage {
+            if storage.trim_devices.script.as_os_str().is_empty() {
+                storage.trim_devices.script = path("exe");
+            }
+            if storage.format_device.script.as_os_str().is_empty() {
+                storage.format_device.script = path("exe");
+            }
+        }
+        if let Some(ref mut update_bios) = self.update_bios {
+            if update_bios.script.as_os_str().is_empty() {
+                update_bios.script = path("exe");
+            }
+        }
+        if let Some(ref mut update_dock) = self.update_dock {
+            if update_dock.script.as_os_str().is_empty() {
+                update_dock.script = path("exe");
+            }
+        }
+    }
+}
+
+impl DeviceConfig {
+    #[cfg(not(test))]
+    async fn load() -> Result<Option<DeviceConfig>> {
         let platform = match device_type().await? {
             DeviceType::SteamDeck => "jupiter",
             DeviceType::LegionGo => "legion-go-series",
@@ -173,24 +284,10 @@ impl PlatformConfig {
             _ => return Ok(None),
         };
         let config = read_to_string(format!(
-            "/usr/share/steamos-manager/platforms/{platform}.toml"
+            "/usr/share/steamos-manager/devices/{platform}.toml"
         ))
         .await?;
         Ok(Some(toml::from_str(config.as_ref())?))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_test_paths(&mut self) {
-        if let Some(ref mut update_bios) = self.update_bios {
-            if update_bios.script.as_os_str().is_empty() {
-                update_bios.script = crate::path("exe");
-            }
-        }
-        if let Some(ref mut update_dock) = self.update_dock {
-            if update_dock.script.as_os_str().is_empty() {
-                update_dock.script = crate::path("exe");
-            }
-        }
     }
 }
 
@@ -206,13 +303,25 @@ where
 
 #[cfg(not(test))]
 pub(crate) async fn platform_config() -> Result<&'static Option<PlatformConfig>> {
-    CONFIG.get_or_try_init(PlatformConfig::load).await
+    PLATFORM_CONFIG.get_or_try_init(PlatformConfig::load).await
+}
+
+#[cfg(not(test))]
+pub(crate) async fn device_config() -> Result<&'static Option<DeviceConfig>> {
+    DEVICE_CONFIG.get_or_try_init(DeviceConfig::load).await
 }
 
 #[cfg(test)]
 pub(crate) async fn platform_config() -> Result<Option<PlatformConfig>> {
     let test = crate::testing::current();
     let config = test.platform_config.borrow().clone();
+    Ok(config)
+}
+
+#[cfg(test)]
+pub(crate) async fn device_config() -> Result<Option<DeviceConfig>> {
+    let test = crate::testing::current();
+    let config = test.device_config.borrow().clone();
     Ok(config)
 }
 
@@ -329,7 +438,7 @@ mod test {
 
     #[tokio::test]
     async fn jupiter_valid() {
-        let config = read_to_string("data/platforms/jupiter.toml")
+        let config = read_to_string("data/devices/jupiter.toml")
             .await
             .expect("read_to_string");
         let res = toml::from_str::<PlatformConfig>(config.as_ref());

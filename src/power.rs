@@ -30,7 +30,7 @@ use zbus::Connection;
 use crate::hardware::{device_type, DeviceType};
 use crate::manager::root::RootManagerProxy;
 use crate::manager::user::{TdpLimit1, MANAGER_PATH};
-use crate::platform::platform_config;
+use crate::platform::device_config;
 use crate::Service;
 use crate::{path, write_synced};
 
@@ -128,7 +128,7 @@ pub(crate) trait TdpLimitManager: Send + Sync {
 }
 
 pub(crate) async fn tdp_limit_manager() -> Result<Box<dyn TdpLimitManager>> {
-    let config = platform_config().await?;
+    let config = device_config().await?;
     let config = config
         .as_ref()
         .and_then(|config| config.tdp_limit.as_ref())
@@ -340,7 +340,7 @@ pub(crate) async fn set_cpu_scaling_governor(governor: CPUScalingGovernor) -> Re
 }
 
 pub(crate) async fn get_gpu_clocks_range() -> Result<RangeInclusive<u32>> {
-    if let Some(range) = platform_config()
+    if let Some(range) = device_config()
         .await?
         .as_ref()
         .and_then(|config| config.gpu_clocks)
@@ -490,7 +490,7 @@ impl TdpLimitManager for GpuHwmonTdpLimitManager {
     }
 
     async fn get_tdp_limit_range(&self) -> Result<RangeInclusive<u32>> {
-        let config = platform_config().await?;
+        let config = device_config().await?;
         let config = config
             .as_ref()
             .and_then(|config| config.tdp_limit.as_ref())
@@ -578,7 +578,7 @@ impl TdpLimitManager for FirmwareAttributeLimitManager {
         let Some(ref performance_profile) = self.performance_profile else {
             return Ok(true);
         };
-        let config = platform_config().await?;
+        let config = device_config().await?;
         if let Some(config) = config
             .as_ref()
             .and_then(|config| config.performance_profile.as_ref())
@@ -591,7 +591,7 @@ impl TdpLimitManager for FirmwareAttributeLimitManager {
 }
 
 pub(crate) async fn get_max_charge_level() -> Result<i32> {
-    let config = platform_config().await?;
+    let config = device_config().await?;
     let config = config
         .as_ref()
         .and_then(|config| config.battery_charge_limit.as_ref())
@@ -609,7 +609,7 @@ pub(crate) async fn get_max_charge_level() -> Result<i32> {
 pub(crate) async fn set_max_charge_level(limit: i32) -> Result<()> {
     ensure!((0..=100).contains(&limit), "Invalid limit");
     let data = limit.to_string();
-    let config = platform_config().await?;
+    let config = device_config().await?;
     let config = config
         .as_ref()
         .and_then(|config| config.battery_charge_limit.as_ref())
@@ -654,7 +654,7 @@ impl TdpManagerService {
         system: &Connection,
         session: &Connection,
     ) -> Result<TdpManagerService> {
-        let config = platform_config().await?;
+        let config = device_config().await?;
         let config = config
             .as_ref()
             .and_then(|config| config.tdp_limit.as_ref())
@@ -858,8 +858,8 @@ pub(crate) mod test {
     use crate::hardware::test::fake_model;
     use crate::hardware::SteamDeckVariant;
     use crate::platform::{
-        BatteryChargeLimitConfig, FirmwareAttributeConfig, PerformanceProfileConfig,
-        PlatformConfig, RangeConfig, TdpLimitConfig,
+        BatteryChargeLimitConfig, DeviceConfig, FirmwareAttributeConfig, PerformanceProfileConfig,
+        RangeConfig, TdpLimitConfig,
     };
     use crate::{enum_roundtrip, testing};
     use anyhow::anyhow;
@@ -1041,14 +1041,14 @@ CCLK_RANGE in Core0:
     async fn test_gpu_hwmon_get_tdp_limit() {
         let handle = testing::start();
 
-        let mut platform_config = PlatformConfig::default();
-        platform_config.tdp_limit = Some(TdpLimitConfig {
+        let mut config = DeviceConfig::default();
+        config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
             firmware_attribute: None,
         });
-        handle.test.platform_config.replace(Some(platform_config));
+        handle.test.device_config.replace(Some(config));
         let manager = tdp_limit_manager().await.unwrap();
 
         setup().await.expect("setup");
@@ -1066,14 +1066,14 @@ CCLK_RANGE in Core0:
     async fn test_gpu_hwmon_set_tdp_limit() {
         let handle = testing::start();
 
-        let mut platform_config = PlatformConfig::default();
-        platform_config.tdp_limit = Some(TdpLimitConfig {
+        let mut config = DeviceConfig::default();
+        config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
             firmware_attribute: None,
         });
-        handle.test.platform_config.replace(Some(platform_config));
+        handle.test.device_config.replace(Some(config));
         let manager = tdp_limit_manager().await.unwrap();
 
         assert_eq!(
@@ -1550,13 +1550,13 @@ CCLK_RANGE in Core0:
     async fn read_max_charge_level() {
         let handle = testing::start();
 
-        let mut platform_config = PlatformConfig::default();
-        platform_config.battery_charge_limit = Some(BatteryChargeLimitConfig {
+        let mut config = DeviceConfig::default();
+        config.battery_charge_limit = Some(BatteryChargeLimitConfig {
             suggested_minimum_limit: Some(10),
             hwmon_name: String::from("steamdeck_hwmon"),
             attribute: String::from("max_battery_charge_level"),
         });
-        handle.test.platform_config.replace(Some(platform_config));
+        handle.test.device_config.replace(Some(config));
 
         let base = path(HWMON_PREFIX).join("hwmon6");
         create_dir_all(&base).await.expect("create_dir_all");
@@ -1650,14 +1650,14 @@ CCLK_RANGE in Core0:
 
         let iface = MockTdpLimit { queue: reply_tx };
 
-        let mut platform_config = PlatformConfig::default();
-        platform_config.tdp_limit = Some(TdpLimitConfig {
+        let mut config = DeviceConfig::default();
+        config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: NonZeroU32::new(6),
             firmware_attribute: None,
         });
-        h.test.platform_config.replace(Some(platform_config));
+        h.test.device_config.replace(Some(config));
         let manager = tdp_limit_manager().await.unwrap();
 
         connection
@@ -1746,14 +1746,14 @@ CCLK_RANGE in Core0:
 
         let iface = MockTdpLimit { queue: reply_tx };
 
-        let mut platform_config = PlatformConfig::default();
-        platform_config.tdp_limit = Some(TdpLimitConfig {
+        let mut config = DeviceConfig::default();
+        config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::GpuHwmon,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
             firmware_attribute: None,
         });
-        h.test.platform_config.replace(Some(platform_config));
+        h.test.device_config.replace(Some(config));
         let manager = tdp_limit_manager().await.unwrap();
 
         connection
@@ -1808,12 +1808,12 @@ CCLK_RANGE in Core0:
         let h = testing::start();
         setup().await.expect("setup");
 
-        let mut platform_config = PlatformConfig::default();
-        platform_config.performance_profile = Some(PerformanceProfileConfig {
+        let mut config = DeviceConfig::default();
+        config.performance_profile = Some(PerformanceProfileConfig {
             platform_profile_name: String::from("platform-profile0"),
             suggested_default: String::from("custom"),
         });
-        platform_config.tdp_limit = Some(TdpLimitConfig {
+        config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::FirmwareAttribute,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
@@ -1822,7 +1822,7 @@ CCLK_RANGE in Core0:
                 performance_profile: Some(String::from("custom")),
             }),
         });
-        h.test.platform_config.replace(Some(platform_config));
+        h.test.device_config.replace(Some(config));
 
         let attributes_base = path(FirmwareAttributeLimitManager::PREFIX)
             .join("tdp0")
@@ -1903,8 +1903,8 @@ CCLK_RANGE in Core0:
         let h = testing::start();
         setup().await.expect("setup");
 
-        let mut platform_config = PlatformConfig::default();
-        platform_config.tdp_limit = Some(TdpLimitConfig {
+        let mut config = DeviceConfig::default();
+        config.tdp_limit = Some(TdpLimitConfig {
             method: TdpLimitingMethod::FirmwareAttribute,
             range: Some(RangeConfig { min: 3, max: 15 }),
             download_mode_limit: None,
@@ -1913,7 +1913,7 @@ CCLK_RANGE in Core0:
                 performance_profile: None,
             }),
         });
-        h.test.platform_config.replace(Some(platform_config));
+        h.test.device_config.replace(Some(config));
 
         let attributes_base = path(FirmwareAttributeLimitManager::PREFIX)
             .join("tdp0")
