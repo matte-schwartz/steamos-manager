@@ -23,11 +23,15 @@ use zbus::Connection;
 
 #[cfg(not(test))]
 use crate::hardware::{device_type, DeviceType};
+#[cfg(test)]
+use crate::path;
 use crate::power::TdpLimitingMethod;
 use crate::systemd::SystemdUnit;
 
 #[cfg(not(test))]
-static CONFIG: OnceCell<Option<PlatformConfig>> = OnceCell::const_new();
+static PLATFORM_CONFIG: OnceCell<Option<PlatformConfig>> = OnceCell::const_new();
+#[cfg(not(test))]
+static DEVICE_CONFIG: OnceCell<Option<DeviceConfig>> = OnceCell::const_new();
 
 #[derive(Clone, Default, Deserialize, Debug)]
 #[serde(default)]
@@ -37,6 +41,11 @@ pub(crate) struct PlatformConfig {
     pub update_dock: Option<ScriptConfig>,
     pub storage: Option<StorageConfig>,
     pub fan_control: Option<ServiceConfig>,
+}
+
+#[derive(Clone, Default, Deserialize, Debug)]
+#[serde(default)]
+pub(crate) struct DeviceConfig {
     pub tdp_limit: Option<TdpLimitConfig>,
     pub gpu_clocks: Option<RangeConfig<u32>>,
     pub battery_charge_limit: Option<BatteryChargeLimitConfig>,
@@ -224,26 +233,12 @@ impl<T: Clone> RangeConfig<T> {
 impl PlatformConfig {
     #[cfg(not(test))]
     async fn load() -> Result<Option<PlatformConfig>> {
-        let platform = match device_type().await? {
-            DeviceType::SteamDeck => "jupiter",
-            DeviceType::LegionGo => "legion-go-series",
-            DeviceType::LegionGoS => "legion-go-series",
-            DeviceType::RogAlly => "rog-ally-series",
-            DeviceType::RogAllyX => "rog-ally-series",
-            DeviceType::ZotacGamingZone => "zotac-gaming-zone",
-            _ => return Ok(None),
-        };
-        let config = read_to_string(format!(
-            "/usr/share/steamos-manager/platforms/{platform}.toml"
-        ))
-        .await?;
+        let config = read_to_string("/usr/share/steamos-manager/platform.toml").await?;
         Ok(Some(toml::from_str(config.as_ref())?))
     }
 
     #[cfg(test)]
     pub(crate) fn set_test_paths(&mut self) {
-        use crate::path;
-
         if let Some(ref mut factory_reset) = self.factory_reset {
             if factory_reset.all.script.as_os_str().is_empty() {
                 factory_reset.all.script = path("exe");
@@ -276,6 +271,26 @@ impl PlatformConfig {
     }
 }
 
+impl DeviceConfig {
+    #[cfg(not(test))]
+    async fn load() -> Result<Option<DeviceConfig>> {
+        let platform = match device_type().await? {
+            DeviceType::SteamDeck => "jupiter",
+            DeviceType::LegionGo => "legion-go-series",
+            DeviceType::LegionGoS => "legion-go-series",
+            DeviceType::RogAlly => "rog-ally-series",
+            DeviceType::RogAllyX => "rog-ally-series",
+            DeviceType::ZotacGamingZone => "zotac-gaming-zone",
+            _ => return Ok(None),
+        };
+        let config = read_to_string(format!(
+            "/usr/share/steamos-manager/devices/{platform}.toml"
+        ))
+        .await?;
+        Ok(Some(toml::from_str(config.as_ref())?))
+    }
+}
+
 fn de_tdp_limiter_method<'de, D>(deserializer: D) -> Result<TdpLimitingMethod, D::Error>
 where
     D: Deserializer<'de>,
@@ -288,13 +303,25 @@ where
 
 #[cfg(not(test))]
 pub(crate) async fn platform_config() -> Result<&'static Option<PlatformConfig>> {
-    CONFIG.get_or_try_init(PlatformConfig::load).await
+    PLATFORM_CONFIG.get_or_try_init(PlatformConfig::load).await
+}
+
+#[cfg(not(test))]
+pub(crate) async fn device_config() -> Result<&'static Option<DeviceConfig>> {
+    DEVICE_CONFIG.get_or_try_init(DeviceConfig::load).await
 }
 
 #[cfg(test)]
 pub(crate) async fn platform_config() -> Result<Option<PlatformConfig>> {
     let test = crate::testing::current();
     let config = test.platform_config.borrow().clone();
+    Ok(config)
+}
+
+#[cfg(test)]
+pub(crate) async fn device_config() -> Result<Option<DeviceConfig>> {
+    let test = crate::testing::current();
+    let config = test.device_config.borrow().clone();
     Ok(config)
 }
 
@@ -411,7 +438,7 @@ mod test {
 
     #[tokio::test]
     async fn jupiter_valid() {
-        let config = read_to_string("data/platforms/jupiter.toml")
+        let config = read_to_string("data/devices/jupiter.toml")
             .await
             .expect("read_to_string");
         let res = toml::from_str::<PlatformConfig>(config.as_ref());

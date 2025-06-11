@@ -28,20 +28,3 @@ no_validate_flag = "--skip-validation"
 
 [fan_control]
 systemd = "jupiter-fan-control.service"
-
-[tdp_limit]
-method = "gpu_hwmon"
-download_mode_limit = 6
-
-[tdp_limit.range]
-min = 3
-max = 15
-
-[gpu_clocks]
-min = 200
-max = 1600
-
-[battery_charge_limit]
-suggested_minimum_limit = 10
-hwmon_name = "steamdeck_hwmon"
-attribute = "max_battery_charge_level"

@@ -24,7 +24,7 @@ use crate::hardware::{
     steam_deck_variant, FactoryResetKind, FanControl, FanControlState, SteamDeckVariant,
 };
 use crate::job::JobManager;
-use crate::platform::platform_config;
+use crate::platform::{device_config, platform_config};
 use crate::power::{
     set_cpu_scaling_governor, set_gpu_clocks, set_gpu_performance_level, set_gpu_power_profile,
     set_max_charge_level, set_platform_profile, tdp_limit_manager, CPUScalingGovernor,
@@ -450,7 +450,7 @@ impl SteamOSManager {
     }
 
     async fn set_performance_profile(&self, profile: &str) -> fdo::Result<()> {
-        let config = platform_config().await.map_err(to_zbus_fdo_error)?;
+        let config = device_config().await.map_err(to_zbus_fdo_error)?;
         let config = config
             .as_ref()
             .and_then(|config| config.performance_profile.as_ref())

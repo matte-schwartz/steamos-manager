@@ -23,7 +23,7 @@ use zbus::zvariant::ObjectPath;
 use zbus::Address;
 use zbus_xml::{Method, Node, Property, Signal};
 
-use crate::platform::PlatformConfig;
+use crate::platform::{DeviceConfig, PlatformConfig};
 
 thread_local! {
     static TEST: RefCell<Option<Rc<Test>>> = const { RefCell::new(None) };
@@ -70,6 +70,7 @@ pub fn start() -> TestHandle {
             mock_dbus: Cell::new(None),
             dbus_address: Mutex::new(None),
             platform_config: RefCell::new(None),
+            device_config: RefCell::new(None),
         });
         *lock.borrow_mut() = Some(test.clone());
         TestHandle { test }
@@ -103,6 +104,7 @@ pub struct Test {
     pub mock_dbus: Cell<Option<MockDBus>>,
     pub dbus_address: Mutex<Option<Address>>,
     pub platform_config: RefCell<Option<PlatformConfig>>,
+    pub device_config: RefCell<Option<DeviceConfig>>,
 }
 
 pub struct TestHandle {
