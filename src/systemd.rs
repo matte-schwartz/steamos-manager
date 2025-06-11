@@ -11,7 +11,7 @@ use std::str::FromStr;
 use strum::{Display, EnumString};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
-use zbus::Connection;
+use zbus::{self, Connection};
 
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Unit",
@@ -19,13 +19,13 @@ use zbus::Connection;
 )]
 trait SystemdUnit {
     #[zbus(property)]
-    fn active_state(&self) -> Result<String>;
+    fn active_state(&self) -> zbus::Result<String>;
     #[zbus(property)]
-    fn unit_file_state(&self) -> Result<String>;
+    fn unit_file_state(&self) -> zbus::Result<String>;
 
-    async fn restart(&self, mode: &str) -> Result<OwnedObjectPath>;
-    async fn start(&self, mode: &str) -> Result<OwnedObjectPath>;
-    async fn stop(&self, mode: &str) -> Result<OwnedObjectPath>;
+    async fn restart(&self, mode: &str) -> zbus::Result<OwnedObjectPath>;
+    async fn start(&self, mode: &str) -> zbus::Result<OwnedObjectPath>;
+    async fn stop(&self, mode: &str) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[zbus::proxy(
@@ -40,28 +40,28 @@ trait SystemdManager {
         files: &[&str],
         runtime: bool,
         force: bool,
-    ) -> Result<(bool, Vec<(String, String, String)>)>;
+    ) -> zbus::Result<(bool, Vec<(String, String, String)>)>;
 
     async fn disable_unit_files(
         &self,
         files: &[&str],
         runtime: bool,
-    ) -> Result<Vec<(String, String, String)>>;
+    ) -> zbus::Result<Vec<(String, String, String)>>;
 
     async fn mask_unit_files(
         &self,
         files: &[&str],
         runtime: bool,
         force: bool,
-    ) -> Result<Vec<(String, String, String)>>;
+    ) -> zbus::Result<Vec<(String, String, String)>>;
 
     async fn unmask_unit_files(
         &self,
         files: &[&str],
         runtime: bool,
-    ) -> Result<Vec<(String, String, String)>>;
+    ) -> zbus::Result<Vec<(String, String, String)>>;
 
-    async fn reload(&self) -> Result<()>;
+    async fn reload(&self) -> zbus::Result<()>;
 }
 
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone)]
@@ -283,7 +283,6 @@ pub mod test {
                     .interface::<_, MockUnit>(path.to_string_lossy())
                     .await;
                 if let Ok(mock_unit) = mock_unit {
-                    dbg!();
                     mock_unit.get_mut().await.unit_file = String::from("enabled");
                 }
             }
