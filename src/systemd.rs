@@ -62,6 +62,8 @@ trait SystemdManager {
     ) -> zbus::Result<Vec<(String, String, String)>>;
 
     async fn reload(&self) -> zbus::Result<()>;
+
+    async fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[derive(Display, EnumString, PartialEq, Debug, Copy, Clone)]
@@ -86,6 +88,17 @@ pub async fn daemon_reload(connection: &Connection) -> Result<()> {
 }
 
 impl<'dbus> SystemdUnit<'dbus> {
+    pub async fn exists(connection: &Connection, name: &str) -> Result<bool> {
+        let manager = SystemdManagerProxy::new(connection).await?;
+        // This is kinda hacky, but zbus makes it pretty hard to get the proper error name
+        let expected_error = format!("Unit {name} not loaded.");
+        match manager.get_unit(name).await {
+            Ok(_) => Ok(true),
+            Err(zbus::Error::Failure(message)) if message == expected_error => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub async fn new(connection: Connection, name: &str) -> Result<SystemdUnit<'dbus>> {
         let path = PathBuf::from("/org/freedesktop/systemd1/unit").join(escape(name));
         let path = String::from(path.to_str().ok_or(anyhow!("Unit name {name} invalid"))?);
@@ -357,6 +370,14 @@ pub mod test {
 
         async fn reload(&self) -> fdo::Result<()> {
             Ok(())
+        }
+
+        async fn get_unit(&mut self, unit: &str) -> fdo::Result<OwnedObjectPath> {
+            Ok(
+                ObjectPath::try_from(format!("/org/freedesktop/systemd1/unit/{}", escape(unit)))
+                    .unwrap()
+                    .into(),
+            )
         }
     }
 

@@ -19,10 +19,12 @@ use tokio::fs::{metadata, read_to_string};
 #[cfg(not(test))]
 use tokio::sync::OnceCell;
 use tokio::task::spawn_blocking;
+use zbus::Connection;
 
 #[cfg(not(test))]
 use crate::hardware::{device_type, DeviceType};
 use crate::power::TdpLimitingMethod;
+use crate::systemd::SystemdUnit;
 
 #[cfg(not(test))]
 static CONFIG: OnceCell<Option<PlatformConfig>> = OnceCell::const_new();
@@ -93,6 +95,14 @@ pub(crate) struct ResetConfig {
     pub user: ScriptConfig,
 }
 
+impl ResetConfig {
+    pub(crate) async fn is_valid(&self, root: bool) -> Result<bool> {
+        Ok(self.all.is_valid(root).await?
+            && self.os.is_valid(root).await?
+            && self.user.is_valid(root).await?)
+    }
+}
+
 #[derive(Clone, Deserialize, Debug)]
 pub(crate) enum ServiceConfig {
     #[serde(rename = "systemd")]
@@ -105,10 +115,31 @@ pub(crate) enum ServiceConfig {
     },
 }
 
+impl ServiceConfig {
+    pub(crate) async fn is_valid(&self, connection: &Connection, root: bool) -> Result<bool> {
+        match self {
+            ServiceConfig::Systemd(unit) => SystemdUnit::exists(connection, unit).await,
+            ServiceConfig::Script {
+                start,
+                stop,
+                status,
+            } => Ok(start.is_valid(root).await?
+                && stop.is_valid(root).await?
+                && status.is_valid(root).await?),
+        }
+    }
+}
+
 #[derive(Clone, Default, Deserialize, Debug)]
 pub(crate) struct StorageConfig {
     pub trim_devices: ScriptConfig,
     pub format_device: FormatDeviceConfig,
+}
+
+impl StorageConfig {
+    pub(crate) async fn is_valid(&self, root: bool) -> Result<bool> {
+        Ok(self.trim_devices.is_valid(root).await? && self.format_device.is_valid(root).await?)
+    }
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -153,6 +184,36 @@ pub(crate) struct FormatDeviceConfig {
     pub no_validate_flag: Option<String>,
 }
 
+impl FormatDeviceConfig {
+    pub(crate) async fn is_valid(&self, root: bool) -> Result<bool> {
+        let meta = match metadata(&self.script).await {
+            Ok(meta) => meta,
+            Err(e) if [ErrorKind::NotFound, ErrorKind::PermissionDenied].contains(&e.kind()) => {
+                return Ok(false)
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if !meta.is_file() {
+            return Ok(false);
+        }
+        if root {
+            let script = self.script.clone();
+            if !spawn_blocking(move || match access(&script, AccessFlags::X_OK) {
+                Ok(()) => Ok(true),
+                Err(Errno::ENOENT | Errno::EACCES) => Ok(false),
+                Err(e) => Err(e),
+            })
+            .await??
+            {
+                return Ok(false);
+            }
+        } else if (meta.mode() & 0o111) == 0 {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+}
+
 impl<T: Clone> RangeConfig<T> {
     #[allow(unused)]
     pub(crate) fn new(min: T, max: T) -> RangeConfig<T> {
@@ -181,14 +242,35 @@ impl PlatformConfig {
 
     #[cfg(test)]
     pub(crate) fn set_test_paths(&mut self) {
+        use crate::path;
+
+        if let Some(ref mut factory_reset) = self.factory_reset {
+            if factory_reset.all.script.as_os_str().is_empty() {
+                factory_reset.all.script = path("exe");
+            }
+            if factory_reset.os.script.as_os_str().is_empty() {
+                factory_reset.os.script = path("exe");
+            }
+            if factory_reset.user.script.as_os_str().is_empty() {
+                factory_reset.user.script = path("exe");
+            }
+        }
+        if let Some(ref mut storage) = self.storage {
+            if storage.trim_devices.script.as_os_str().is_empty() {
+                storage.trim_devices.script = path("exe");
+            }
+            if storage.format_device.script.as_os_str().is_empty() {
+                storage.format_device.script = path("exe");
+            }
+        }
         if let Some(ref mut update_bios) = self.update_bios {
             if update_bios.script.as_os_str().is_empty() {
-                update_bios.script = crate::path("exe");
+                update_bios.script = path("exe");
             }
         }
         if let Some(ref mut update_dock) = self.update_dock {
             if update_dock.script.as_os_str().is_empty() {
-                update_dock.script = crate::path("exe");
+                update_dock.script = path("exe");
             }
         }
     }
