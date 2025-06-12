@@ -333,6 +333,15 @@
         The volume for speech output. Valid values ar 0.0 for off, 10.0 for highest.
     -->
     <property name="Volume" type="d" access="readwrite"/>
+
+    <!--
+        Mode
+
+        Which mode the screen reader should operate in.
+
+        Valid modes: 0 - Browse mode, 1 - Focus mode.
+    -->
+    <property name="Mode" type="u" access="readwrite"/>
   </interface>
 
   <!--

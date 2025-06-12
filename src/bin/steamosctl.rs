@@ -20,6 +20,7 @@ use steamos_manager::proxy::{
     TdpLimit1Proxy, UpdateBios1Proxy, UpdateDock1Proxy, WifiDebug1Proxy, WifiDebugDump1Proxy,
     WifiPowerManagement1Proxy,
 };
+use steamos_manager::screenreader::ScreenReaderMode;
 use steamos_manager::wifi::{WifiBackend, WifiDebugMode, WifiPowerManagement};
 use zbus::fdo::{IntrospectableProxy, PropertiesProxy};
 use zbus::{zvariant, Connection};
@@ -241,6 +242,15 @@ enum Commands {
     SetScreenReaderVolume {
         /// Valid volume between 0.0 for off, and 10.0 for loudest.
         volume: f64,
+    },
+
+    /// Get screen reader mode
+    GetScreenReaderMode,
+
+    /// Set screen reader mode
+    SetScreenReaderMode {
+        /// Valid modes are `browse`, `focus`
+        mode: ScreenReaderMode,
     },
 }
 
@@ -590,6 +600,18 @@ async fn main() -> Result<()> {
         Commands::SetScreenReaderVolume { volume } => {
             let proxy = ScreenReader0Proxy::new(&conn).await?;
             proxy.set_volume(*volume).await?;
+        }
+        Commands::GetScreenReaderMode => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            let mode = proxy.mode().await?;
+            match ScreenReaderMode::try_from(mode) {
+                Ok(s) => println!("Screen Reader Mode: {s}"),
+                Err(_) => println!("Got unknown screen reader mode value {mode} from backend"),
+            }
+        }
+        Commands::SetScreenReaderMode { mode } => {
+            let proxy = ScreenReader0Proxy::new(&conn).await?;
+            proxy.set_mode(*mode as u32).await?;
         }
     }
 
