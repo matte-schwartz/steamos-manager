@@ -1,3 +1,7 @@
+# NOTE: DEVELOPMENT TAKES PLACE AT https://gitlab.steamos.cloud/holo/steamos-manager
+
+---
+
 # SteamOS Manager
 
 SteamOS Manager is a system daemon that aims to abstract Steam's interactions
